@@ -145,12 +145,23 @@ test("la versión mínima permite bloquear instalaciones antiguas", () => {
   assert.equal(compareVersions("2.0.0", "1.9.9"), 1);
 });
 
-test("la versión 1.3.0 usa el nuevo enlace de Bold y los anuncios iOS entregados", () => {
-  assert.equal(APP_VERSION, "1.3.0");
+test("la versión 1.4.0 usa el nuevo enlace de Bold y los anuncios iOS entregados", () => {
+  assert.equal(APP_VERSION, "1.4.0");
   assert.equal(BOLD_CHECKOUT_URL, "https://checkout.bold.co/payment/LNK_84NNU7YDX9");
   assert.equal(ADMOB_IDS.iosAppId, "ca-app-pub-8007313797348394~9653183215");
   assert.equal(ADMOB_IDS.appOpen.iosProduction, "ca-app-pub-8007313797348394/7027019877");
   assert.equal(ADMOB_IDS.achievementInterstitial.iosProduction, "ca-app-pub-8007313797348394/8172580587");
+});
+
+test("la interfaz 1.4 detiene multimedia, traduce automáticamente y comparte imágenes de forma nativa", async () => {
+  const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  const androidShareSource = await readFile(new URL("../android/app/src/main/java/com/duobiblia/app/VerseSharePlugin.java", import.meta.url), "utf8");
+  assert.match(appSource, /appStateChange/);
+  assert.match(appSource, /scheduleAutomaticTranslation\(host\)/);
+  assert.match(appSource, /NativeVerseShare\.shareImage/);
+  assert.match(appSource, /devotional-interactive-text/);
+  assert.match(androidShareSource, /Intent\.ACTION_SEND/);
+  assert.match(androidShareSource, /image\/png/);
 });
 
 test("los recordatorios diarios usan la hora local de mañana, tarde y noche", () => {

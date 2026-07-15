@@ -15,6 +15,8 @@ import {
   topics
 } from "./src/core.mjs";
 import { initializeMobileAds, showAchievementInterstitial } from "./src/ads.mjs";
+import { App as MobileApp } from "@capacitor/app";
+import { Capacitor, registerPlugin } from "@capacitor/core";
 import { BIBLE_VERSIONS, getBibleChapter, searchBible } from "./src/bible-service.mjs";
 import { chooseNextTrack, prayerTracks } from "./src/music.mjs";
 import { translateWithContext } from "./src/translation-service.mjs";
@@ -81,6 +83,9 @@ let prayerAudio = null;
 let progressSyncTimer = null;
 let prayerOpenedFromNotification = false;
 let activeSelectionKey = null;
+let selectionTranslationTimer = null;
+const AUTO_TRANSLATE_DELAY_MS = 620;
+const NativeVerseShare = registerPlugin("VerseShare");
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 
@@ -152,6 +157,8 @@ function icon(name, label = "") {
     back: '<path d="m15 18-6-6 6-6"/>',
     moon: '<path d="M21 12.7A9 9 0 1 1 11.3 3 7 7 0 0 0 21 12.7Z"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    sunrise: '<path d="M4 18h16M6 22h12M8 18a4 4 0 0 1 8 0M12 4v4M4.9 8.9l2.8 2.8M19.1 8.9l-2.8 2.8M2 14h4M18 14h4"/>',
+    moonStars: '<path d="M19.7 15.1A8 8 0 1 1 9 4.3a6.4 6.4 0 0 0 10.7 10.8Z"/><path d="m18 3 .5 1.4L20 5l-1.5.6L18 7l-.5-1.4L16 5l1.5-.6L18 3ZM21 9l.3.8.7.2-.7.3-.3.7-.3-.7-.7-.3.7-.2L21 9Z"/>',
     play: '<path d="m8 5 11 7-11 7V5Z"/>',
     pause: '<path d="M8 5v14M16 5v14"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
@@ -242,7 +249,11 @@ function highlightClass(key) {
 }
 
 function renderSelectionBar() {
-  return `<div class="selection-toolbar" aria-live="polite"><span class="selection-preview"></span><button data-action="translate-selection">${icon("translate")}<b>${dualText("Traducir selección", "Translate selection")}</b></button><button class="selection-clear" data-action="clear-selection" aria-label="${text("Limpiar selección", "Clear selection")}">${icon("close")}</button></div>`;
+  return `<div class="selection-toolbar" aria-live="polite"><span class="selection-preview"></span><small class="selection-auto-copy">${dualText("Traducción automática", "Automatic translation")}</small><button class="selection-clear" data-action="clear-selection" aria-label="${text("Limpiar selección", "Clear selection")}">${icon("close")}</button></div>`;
+}
+
+function selectionHostAttributes(key, value, sourceLang = state.uiLang) {
+  return `data-verse-key="${escapeHtml(key)}" data-verse-text="${escapeHtml(value)}" data-source-lang="${sourceLang}" data-verse-context="${escapeHtml(value)}"`;
 }
 
 function renderVerseTools(record, compact = false) {
@@ -406,7 +417,7 @@ function getPrayerExperience(date = new Date()) {
   const period = getLocalDayPeriod(date);
   const experiences = {
     morning: {
-      period, symbol: "☀", verseId: "john-14-27",
+      period, iconName: "sunrise", verseId: "john-14-27",
       title: { es: "Oración de la mañana", en: "Morning prayer" },
       intro: { es: "Respira. Dios está aquí.", en: "Breathe. God is here." },
       duration: { es: "7 minutos para comenzar en paz", en: "7 minutes to begin in peace" },
@@ -416,7 +427,7 @@ function getPrayerExperience(date = new Date()) {
       prayer: { es: "Padre celestial, gracias por regalarme este nuevo día. Cuando mi mente corra hacia la preocupación, recuérdame tu cercanía. Llena mi corazón de la paz que Jesús prometió y guía mis palabras, mis decisiones y mis pasos. En el nombre de Jesús, amén.", en: "Heavenly Father, thank you for the gift of this new day. When my mind runs toward worry, remind me that you are near. Fill my heart with the peace Jesus promised and guide my words, choices, and steps. In Jesus' name, amen." }
     },
     afternoon: {
-      period, symbol: "✦", verseId: "psalm-23-4",
+      period, iconName: "sun", verseId: "psalm-23-4",
       title: { es: "Pausa de oración", en: "Afternoon prayer pause" },
       intro: { es: "Haz una pausa. Él camina contigo.", en: "Pause. He walks with you." },
       duration: { es: "7 minutos para renovar tus fuerzas", en: "7 minutes to renew your strength" },
@@ -426,7 +437,7 @@ function getPrayerExperience(date = new Date()) {
       prayer: { es: "Señor, renueva mis fuerzas para lo que queda de este día. Dame sabiduría, paciencia y un corazón atento. Acompáñame en cada tarea y ayúdame a llevar paz a quienes encuentre. Amén.", en: "Lord, renew my strength for the rest of this day. Give me wisdom, patience, and an attentive heart. Walk with me through each task and help me bring peace to those I meet. Amen." }
     },
     night: {
-      period, symbol: "☾", verseId: "psalm-34-18",
+      period, iconName: "moonStars", verseId: "psalm-34-18",
       title: { es: "Oración de la noche", en: "Night prayer" },
       intro: { es: "Descansa. Dios permanece cerca.", en: "Rest. God remains near." },
       duration: { es: "7 minutos para cerrar el día en paz", en: "7 minutes to close the day in peace" },
@@ -493,7 +504,7 @@ function renderHome() {
     <section class="section-block">
       <div class="section-title"><div><span class="eyebrow">${dualText("RITUAL DIARIO", "DAILY RITUAL")}</span><h2>${dualObject(prayer.title)}</h2></div><span class="completion-mark ${prayerDone ? "done" : ""}">${prayerDone ? icon("check") : "1"}</span></div>
       <button class="morning-card" data-action="open-prayer">
-        ${spotIllustration("prayer", "morning-icon")}
+        <span class="ritual-period-icon ritual-${prayer.period}">${icon(prayer.iconName)}</span>
         <div><strong>${prayerDone ? dualText("Oración completada", "Prayer completed") : dualObject(prayer.duration)}</strong>${dualText("Versículo · Meditación · Oración", "Verse · Meditation · Prayer", "card-secondary")}</div>
         <span class="round-arrow">${icon("play")}</span>
       </button>
@@ -565,7 +576,7 @@ function renderKjvChapter() {
     <section class="chapter-heading">
       <span>${version.id === "kjv" ? "KING JAMES VERSION" : text("MI BIBLIA TRADUCIDA", "MY TRANSLATED BIBLE")}</span>
       <h1>${book[state.uiLang]} ${chapter}</h1>
-      <p>${text("Toca cualquier palabra para traducirla con su contexto.", "Tap any word for its translation and context.")}</p>
+      <p>${text("Selecciona una o varias palabras; la traducción aparece automáticamente.", "Select one or more words; the translation appears automatically.")}</p>
       <div class="version-toggle chapter-version-toggle"><button data-action="switch-bible-version" data-version="kjv" class="${version.id === "kjv" ? "active" : ""}">KJV</button><button data-action="switch-bible-version" data-version="mi-biblia" class="${version.id === "mi-biblia" ? "active" : ""}">${text("MI BIBLIA", "MY BIBLE")}</button></div>
     </section>
     <nav class="chapter-switcher">
@@ -653,9 +664,9 @@ function renderPrayer() {
   return `
     <section class="prayer-hero prayer-${prayer.period}">
       <span class="eyebrow">${dualText("MOMENTO DE ORACIÓN", "PRAYER MOMENT")}<b class="local-time">${new Intl.DateTimeFormat(state.uiLang === "es" ? "es-CO" : "en-US", { hour: "numeric", minute: "2-digit" }).format(new Date())}</b></span>
-      <div class="prayer-sun">${prayer.symbol}</div>
+      <div class="prayer-sun">${icon(prayer.iconName)}</div>
       <h1>${dualObject(prayer.intro)}</h1>
-      <p>${dualText(`Toca cualquier palabra en ${sourceLang === "en" ? "inglés" : "español"} para traducirla con su contexto.`, `Tap any ${sourceLang === "en" ? "English" : "Spanish"} word to translate it in context.`, "hero-guidance")}</p>
+      <p>${dualText(`Selecciona una o varias palabras en ${sourceLang === "en" ? "inglés" : "español"}; la traducción aparecerá sola.`, `Select one or more ${sourceLang === "en" ? "English" : "Spanish"} words; the translation appears automatically.`, "hero-guidance")}</p>
       <div class="prayer-music-card ${state.audioPlaying ? "playing" : "muted"}"><button class="music-orbit-button" data-action="toggle-audio" aria-label="${state.audioPlaying ? text("Pausar música", "Pause music") : text("Reproducir música", "Play music")}">${icon(state.audioPlaying ? "pause" : "music")}</button><div>${dualText(state.audioPlaying ? "SONANDO AHORA" : "MÚSICA EN PAUSA", state.audioPlaying ? "NOW PLAYING" : "MUSIC PAUSED", "music-status")}<strong>${dualObject(track.label, "track-copy")}</strong></div><button class="music-next-button" data-action="next-track" aria-label="${text("Siguiente canción", "Next track")}">${icon("skip")}</button><i class="music-equalizer"><b></b><b></b><b></b><b></b></i></div>
     </section>
     <article class="devotional-content">
@@ -667,16 +678,18 @@ function renderPrayer() {
         <p class="devotional-secondary scripture-secondary" lang="${secondaryLang}">${escapeHtml(verse[secondaryLang])}</p>
         ${renderVerseTools(verseRecord)}
       </section>
-      <section class="devotional-section meditation-section">
+      <section class="devotional-section meditation-section" ${selectionHostAttributes(`devotional:${dateKey()}:meditation:${state.uiLang}`, prayer.meditation[state.uiLang], state.uiLang)}>
         <span class="section-number">02</span><p class="eyebrow">${dualText("MEDITACIÓN", "MEDITATION")}</p>
         <h2>${dualObject(prayer.meditationTitle)}</h2>
-        <p>${prayer.meditation[state.uiLang]}</p>
+        <p class="devotional-interactive-text">${renderInteractiveText(prayer.meditation[state.uiLang])}</p>
+        ${renderSelectionBar()}
         <blockquote class="devotional-secondary" lang="${opposite()}">${escapeHtml(prayer.meditation[opposite()])}</blockquote>
       </section>
-      <section class="devotional-section pray-section">
+      <section class="devotional-section pray-section" ${selectionHostAttributes(`devotional:${dateKey()}:prayer:${state.uiLang}`, prayer.prayer[state.uiLang], state.uiLang)}>
         <span class="section-number">03</span><p class="eyebrow">${dualText("OREMOS", "LET US PRAY")}</p>
         <h2>${dualObject(prayer.prayerTitle)}</h2>
-        <p>${prayer.prayer[state.uiLang]}</p>
+        <p class="devotional-interactive-text">${renderInteractiveText(prayer.prayer[state.uiLang])}</p>
+        ${renderSelectionBar()}
         <p class="devotional-secondary" lang="${opposite()}">${escapeHtml(prayer.prayer[opposite()])}</p>
       </section>
       <button class="amen-button ${done ? "completed" : ""}" data-action="amen">${done ? icon("check") : ""}${done ? dualText("Completado por hoy", "Completed today") : dualText("Amén", "Amen")}</button>
@@ -710,7 +723,7 @@ function renderReader() {
       ${renderVerseTools(verseRecord)}
     </section>
     <article class="reader-page">
-      <header><span>${dualText(`${verse.book.es.toUpperCase()} · ${sourceLang === "es" ? sourceVersion : targetVersion}`, `${verse.book.en.toUpperCase()} · ${sourceLang === "en" ? sourceVersion : targetVersion}`)}</span><h1>${dualText(verse.reference.es, verse.reference.en)}</h1><p>${dualText("Toca una palabra para traducirla", "Tap a word to translate it")}</p></header>
+      <header><span>${dualText(`${verse.book.es.toUpperCase()} · ${sourceLang === "es" ? sourceVersion : targetVersion}`, `${verse.book.en.toUpperCase()} · ${sourceLang === "en" ? sourceVersion : targetVersion}`)}</span><h1>${dualText(verse.reference.es, verse.reference.en)}</h1><p>${dualText("Selecciona una frase y se traduce al instante", "Select a phrase and it translates instantly")}</p></header>
       <div class="chapter-rule"><span>${verse.chapter}</span></div>
       <p class="reader-verse" data-source-lang="${sourceLang}" data-verse-context="${escapeHtml(verse[sourceLang])}"><sup>${verse.verse}</sup>${renderInteractiveText(verse[sourceLang])}</p>
       ${renderSelectionBar()}
@@ -978,6 +991,8 @@ function previousOrNextVerse(direction) {
 }
 
 function clearSelectionUI() {
+  clearTimeout(selectionTranslationTimer);
+  selectionTranslationTimer = null;
   document.querySelectorAll(".word-token.selected").forEach((token) => token.classList.remove("selected"));
   document.querySelectorAll("[data-verse-key].has-selection").forEach((host) => host.classList.remove("has-selection"));
   document.querySelectorAll(".selection-preview").forEach((preview) => { preview.textContent = ""; });
@@ -996,6 +1011,22 @@ function updateSelectionUI(host) {
   activeSelectionKey = host.dataset.verseKey;
   host.classList.add("has-selection");
   if (preview) preview.textContent = selected.map((token) => token.dataset.word).join(" ");
+}
+
+function scheduleAutomaticTranslation(host) {
+  clearTimeout(selectionTranslationTimer);
+  const selected = [...host.querySelectorAll(".word-token.selected")];
+  if (!selected.length) return;
+  selectionTranslationTimer = setTimeout(async () => {
+    if (!document.documentElement.contains(host)) return;
+    const currentSelection = [...host.querySelectorAll(".word-token.selected")]
+      .map((token) => token.dataset.word)
+      .join(" ");
+    const context = host.dataset.verseContext || host.dataset.verseText || currentSelection;
+    const sourceLang = host.dataset.sourceLang || "en";
+    selectionTranslationTimer = null;
+    await openContextTranslation(currentSelection, context, sourceLang);
+  }, AUTO_TRANSLATE_DELAY_MS);
 }
 
 async function openContextTranslation(selection, context, sourceLang = "en") {
@@ -1123,11 +1154,29 @@ async function createVerseShareFile(record) {
   return blob ? new File([blob], `DuoBiblia-${record.reference.replace(/[^a-z0-9]+/gi, "-")}.png`, { type: "image/png" }) : null;
 }
 
+async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
 async function shareVerse(record) {
   if (!record) return;
   const shareText = `“${record.text}”\n${record.reference}\n\nDuoBiblia`;
   try {
     const file = await createVerseShareFile(record);
+    if (file && Capacitor.isNativePlatform()) {
+      await NativeVerseShare.shareImage({
+        title: record.reference,
+        text: shareText,
+        base64: await fileToBase64(file)
+      });
+      return;
+    }
     if (file && navigator.share && navigator.canShare?.({ files: [file] })) {
       await navigator.share({ title: record.reference, text: shareText, files: [file] });
       return;
@@ -1194,6 +1243,13 @@ function stopPrayerMusic() {
   state.audioPlaying = false;
 }
 
+function suspendActiveMedia() {
+  stopPrayerMusic();
+  clearTimeout(selectionTranslationTimer);
+  selectionTranslationTimer = null;
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
 app.addEventListener("click", async (event) => {
   const actionTarget = event.target.closest("[data-action]");
   if (!actionTarget) return;
@@ -1251,14 +1307,9 @@ app.addEventListener("click", async (event) => {
     if (activeSelectionKey && activeSelectionKey !== host.dataset.verseKey) clearSelectionUI();
     actionTarget.classList.toggle("selected");
     updateSelectionUI(host);
+    scheduleAutomaticTranslation(host);
   } else if (action === "clear-selection") {
     clearSelectionUI();
-  } else if (action === "translate-selection") {
-    const host = actionTarget.closest("[data-verse-key]");
-    const selection = [...host.querySelectorAll(".word-token.selected")].map((token) => token.dataset.word).join(" ");
-    const context = host.dataset.verseContext || host.dataset.verseText || selection;
-    const sourceLang = host.dataset.sourceLang || "en";
-    await openContextTranslation(selection, context, sourceLang);
   } else if (action === "translate-word") {
     const word = actionTarget.dataset.word;
     const host = actionTarget.closest("[data-verse-key], [data-verse-context]");
@@ -1512,6 +1563,19 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && state.modal) setState({ modal: null }, false);
 });
+
+MobileApp.addListener("appStateChange", ({ isActive }) => {
+  if (!isActive) {
+    suspendActiveMedia();
+    return;
+  }
+  if (state.route === "prayer") render();
+}).catch(() => {});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) suspendActiveMedia();
+});
+window.addEventListener("pagehide", suspendActiveMedia);
 
 render();
 syncNativePremiumState(state.premium).catch(() => {});

@@ -1,5 +1,16 @@
 # Historial de versiones
 
+## 1.4.0 — Traducción instantánea y compartir nativo
+
+- El audio y la lectura en voz alta se detienen al enviar la aplicación a segundo plano o cerrarla.
+- Seleccionar una o varias palabras abre automáticamente la traducción contextual, sin tocar otro icono.
+- La meditación y la oración completa ahora admiten selección y traducción contextual.
+- Compartir crea una tarjeta PNG de 1080 × 1080 y abre el selector nativo con WhatsApp, Instagram y las demás aplicaciones compatibles instaladas.
+- Iconos explícitos de amanecer, tarde y noche según la hora local.
+- Pantallas de idioma, emociones, cuenta y navegación adaptadas a teléfonos estrechos, bajos y modo horizontal.
+- Botón de Google corregido para que el texto bilingüe no se superponga.
+- APK de producción compilado con los IDs reales de AdMob y los límites de frecuencia existentes.
+
 ## 1.3.0 — Interacción bíblica completa
 
 - Selección de una o varias palabras para traducir expresiones y frases con su contexto.

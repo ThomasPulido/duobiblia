@@ -75,7 +75,7 @@ En el panel de Bold, registrar como webhook:
 
 `https://TU-PROYECTO.supabase.co/functions/v1/bold-webhook`
 
-El backend verifica `x-bold-signature`, acepta únicamente `SALE_APPROVED`, valida la referencia del enlace, evita eventos duplicados y concede un mes a la cuenta cuyo correo coincide.
+El backend verifica `x-bold-signature`, acepta únicamente `SALE_APPROVED`, exige la referencia exacta `LNK_84NNU7YDX9`, evita eventos duplicados y concede un mes únicamente a la cuenta verificada cuyo correo coincide con `payer_email`.
 
 Cada pago aprobado añade un mes a la fecha vigente; al vencer, Premium se desactiva automáticamente. El enlace compartido de Bold no permite cobrar otra vez por sí solo. Para una renovación automática real se necesita que Bold habilite la **API de Pagos en Línea recurrentes**, entregue una clave de producción y apruebe la integración. Nunca se almacenan números de tarjeta en DuoBiblia.
 
@@ -99,7 +99,7 @@ Ejemplo:
 
 ```sql
 update public.app_versions
-set latest_version = '1.3.0', minimum_version = '1.3.0', updated_at = now()
+set latest_version = '1.4.0', minimum_version = '1.4.0', updated_at = now()
 where platform = 'android';
 ```
 
@@ -109,7 +109,7 @@ Para distribución directa en Android, aplicar también `supabase/migrations/202
 
 ```powershell
 $env:SUPABASE_SERVICE_ROLE_KEY = "CLAVE_PRIVADA_SOLO_EN_TU_PC"
-./scripts/publish-apk.ps1 -ProjectUrl "https://TU-PROYECTO.supabase.co" -ApkPath "./DuoBiblia-1.3.0.apk" -Version "1.3.0" -MinimumVersion "1.3.0"
+./scripts/publish-apk.ps1 -ProjectUrl "https://TU-PROYECTO.supabase.co" -ApkPath "./DuoBiblia-1.4.0.apk" -Version "1.4.0" -MinimumVersion "1.4.0"
 ```
 
 El script sube primero el APK y solo después cambia la versión obligatoria, evitando dejar instalaciones bloqueadas sin archivo descargable.

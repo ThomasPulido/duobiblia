@@ -17,6 +17,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         if let bridgeController = window?.rootViewController as? CAPBridgeViewController {
             bridgeController.loadViewIfNeeded()
             bridgeController.bridge?.registerPluginInstance(PremiumStatePlugin())
+            bridgeController.bridge?.registerPluginInstance(VerseSharePlugin())
         }
         return true
     }
@@ -56,6 +57,40 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
     }
 
+}
+
+@objc(VerseSharePlugin)
+public class VerseSharePlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "VerseSharePlugin"
+    public let jsName = "VerseShare"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "shareImage", returnType: CAPPluginReturnPromise)
+    ]
+
+    @objc func shareImage(_ call: CAPPluginCall) {
+        guard
+            let encoded = call.getString("base64"),
+            let data = Data(base64Encoded: encoded),
+            let image = UIImage(data: data)
+        else {
+            call.reject("La imagen del versículo está vacía")
+            return
+        }
+
+        let text = call.getString("text") ?? "DuoBiblia"
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let presenter = self.bridge?.viewController else {
+                call.reject("No se pudo abrir el menú para compartir")
+                return
+            }
+            let activity = UIActivityViewController(activityItems: [image, text], applicationActivities: nil)
+            if let popover = activity.popoverPresentationController {
+                popover.sourceView = presenter.view
+                popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.maxY - 1, width: 1, height: 1)
+            }
+            presenter.present(activity, animated: true) { call.resolve() }
+        }
+    }
 }
 
 @objc(PremiumStatePlugin)

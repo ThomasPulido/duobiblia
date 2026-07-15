@@ -1,6 +1,6 @@
 {
   "name": "duobiblia",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "description": "Aplicación móvil bilingüe para leer la Biblia y aprender idiomas.",

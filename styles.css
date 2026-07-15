@@ -602,7 +602,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline-colo
   border-radius: 14px;
   background: var(--surface);
 }
-.google-auth-button span { display: grid; place-items: center; width: 23px; height: 23px; color: #4285f4; font-size: 16px; font-weight: 900; }
+.google-auth-button > span:first-child { display: grid; place-items: center; width: 23px; height: 23px; flex: 0 0 23px; color: #4285f4; font-size: 16px; font-weight: 900; }
+.google-auth-button > .dual-copy { width: auto; min-width: 0; align-items: center; color: var(--ink); font-size: 12px; line-height: 1.12; }
+.google-auth-button > .dual-copy > span,
+.google-auth-button > .dual-copy > small { width: auto; height: auto; color: inherit; }
 .google-auth-button:disabled, .primary-button:disabled, .secondary-button:disabled { cursor: not-allowed; opacity: .5; }
 .auth-divider { display: flex; gap: 10px; align-items: center; margin: 18px 0 2px; color: var(--ink-soft); font-size: 9px; }
 .auth-divider::before, .auth-divider::after { flex: 1; height: 1px; content: ""; background: var(--line); }
@@ -1086,4 +1089,107 @@ body.dark .verse-action-row > button.active { color: #f7ddb0; }
   .selection-toolbar button b { display: none; }
   .topic-row, .topic-selector { grid-auto-columns: 92px; }
   .topic-chip { width: 92px; }
+}
+
+/* 1.4 — responsive devotional reading, explicit day/night art and instant translation. */
+.ritual-period-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  border-radius: 20px;
+  box-shadow: inset 0 0 0 1px rgba(87, 66, 31, .08);
+}
+.ritual-period-icon .icon { width: 31px; height: 31px; }
+.ritual-morning { color: #8b6417; background: #f9e8b9; }
+.ritual-afternoon { color: #9a5f24; background: #f6dfca; }
+.ritual-night { color: #38506f; background: #e3e9f2; }
+body.dark .ritual-morning { color: #f1cd7c; background: #493e2d; }
+body.dark .ritual-afternoon { color: #efbd84; background: #4c392e; }
+body.dark .ritual-night { color: #c6d8f5; background: #293747; }
+.prayer-sun .icon { width: 43px; height: 43px; stroke-width: 1.55; }
+
+.devotional-interactive-text { color: var(--ink) !important; }
+.devotional-interactive-text .word-token { color: inherit; }
+.selection-auto-copy { flex: 0 0 auto; color: var(--ink-soft); font-size: 8px; text-align: right; }
+.selection-auto-copy .dual-copy { align-items: flex-end; }
+.selection-auto-copy .dual-copy > small { font-size: 6px; }
+
+.onboarding-screen,
+.mood-screen {
+  width: 100%;
+  min-height: 100dvh;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.onboarding-art { height: clamp(180px, 30dvh, 255px); min-height: 180px; flex: 0 0 auto; }
+.onboarding-copy { flex: 0 0 auto; }
+.language-options { width: 100%; min-width: 0; }
+.language-card { min-width: 0; }
+.language-copy { min-width: 0; flex: 1; }
+.language-copy strong,
+.language-copy small { overflow-wrap: anywhere; }
+.preferred-pill { max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.simple-header,
+.mood-heading,
+.mood-grid,
+.mood-footer { width: 100%; min-width: 0; }
+.mood-option { min-width: 0; }
+.mood-option strong { max-width: 100%; overflow-wrap: anywhere; text-align: center; }
+.mood-option strong .dual-copy { max-width: 100%; align-items: center; }
+.modal-card { max-height: calc(100dvh - 36px); }
+
+@media (max-width: 360px) {
+  .onboarding-screen, .mood-screen { padding-right: 15px; padding-left: 15px; }
+  .onboarding-art { margin-right: -15px; margin-left: -15px; }
+  .onboarding-copy h1 { font-size: clamp(29px, 10vw, 36px); }
+  .onboarding-copy > p:last-child,
+  .mood-heading p { font-size: 12px; }
+  .language-card { gap: 10px; padding: 12px; }
+  .language-flag { width: 42px; height: 42px; flex: 0 0 42px; }
+  .language-copy strong { font-size: 14px; }
+  .language-copy small { font-size: 9px; }
+  .mood-heading h1 { font-size: clamp(32px, 11vw, 39px); }
+  .mood-option { min-height: 92px; padding: 9px; }
+  .mood-option span { font-size: 32px; }
+  .top-stats { gap: 3px; }
+  .stat-chip { min-width: 32px; padding: 0 7px; }
+  .premium-chip span { display: none; }
+  .brand-button { gap: 6px; font-size: 18px; }
+  .brand-button img { width: 30px; height: 30px; }
+  .ritual-period-icon { width: 54px; height: 54px; flex-basis: 54px; border-radius: 17px; }
+  .morning-card { gap: 10px; padding: 13px; }
+  .selection-auto-copy { display: none; }
+}
+
+@media (max-height: 720px) {
+  .onboarding-art { height: 175px; min-height: 175px; }
+  .book-illustration { height: 105px; transform: scale(.78); }
+  .onboarding-copy { padding-top: 17px; padding-bottom: 10px; }
+  .onboarding-copy h1 { margin-bottom: 8px; font-size: clamp(29px, 8vw, 37px); }
+  .onboarding-copy > p:last-child { font-size: 11px; line-height: 1.4; }
+  .language-card { min-height: 64px; padding-top: 10px; padding-bottom: 10px; }
+  .language-flag { width: 42px; height: 42px; }
+  .privacy-note { margin-top: 9px; }
+  .mood-heading { padding-top: 20px; padding-bottom: 15px; }
+  .mood-heading h1 { font-size: clamp(32px, 9vw, 42px); }
+  .mood-grid { gap: 8px; }
+  .mood-option { min-height: 82px; padding: 8px; }
+  .mood-option span { font-size: 30px; }
+  .mood-footer { margin-top: 14px; }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  .onboarding-screen { display: grid; grid-template-columns: minmax(180px, .85fr) minmax(290px, 1.15fr); grid-template-rows: auto 1fr auto; gap: 0 20px; padding-top: max(12px, env(safe-area-inset-top)); }
+  .onboarding-art { grid-row: 1 / 4; height: calc(100dvh - 24px); min-height: 0; margin: 0; border-radius: 30px; }
+  .onboarding-copy { align-self: end; }
+  .language-options { align-self: center; margin-top: 0; }
+  .privacy-note { grid-column: 2; }
+  .mood-screen { display: grid; grid-template-columns: minmax(250px, .8fr) minmax(340px, 1.2fr); grid-template-rows: auto 1fr auto; column-gap: 24px; }
+  .simple-header { grid-column: 1 / -1; }
+  .mood-heading { align-self: center; padding: 8px 0; }
+  .mood-grid { align-self: center; grid-template-columns: repeat(3, 1fr); }
+  .mood-footer { grid-column: 1 / -1; margin-top: 8px; }
 }
