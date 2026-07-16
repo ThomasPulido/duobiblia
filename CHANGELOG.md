@@ -1,5 +1,14 @@
 # Historial de versiones
 
+## 1.5.0 — Plan anual y progreso confiable
+
+- Plan real de 365 días que recorre los 1.189 capítulos de la Biblia en orden, sin omisiones ni duplicados.
+- Cada día abre sus capítulos correctos y guía la lectura hasta permitir completar la jornada.
+- Progreso del plan, racha, puntos, favoritos, notas, colores y quiz sincronizados con resolución de cambios recientes.
+- Guardado en la nube serializado y protegido contra escrituras simultáneas que restauraban información anterior.
+- El botón Amén vuelve a habilitarse al cambiar el día según la hora local, incluso después de una actualización desde datos antiguos.
+- Traducción restaurada al flujo solicitado: seleccionar una o varias palabras y luego tocar Traducir.
+
 ## 1.4.0 — Traducción instantánea y compartir nativo
 
 - El audio y la lectura en voz alta se detienen al enviar la aplicación a segundo plano o cerrarla.

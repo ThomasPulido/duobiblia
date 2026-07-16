@@ -94,23 +94,48 @@ export async function signOut() {
   if (error) throw error;
 }
 
-export async function syncProgress(user, progress) {
+let progressSyncQueue = Promise.resolve();
+
+async function performProgressSync(user, progress) {
   if (!supabase || !user) return null;
-  const { data: existing, error: readError } = await supabase
-    .from("profiles")
-    .select("progress")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (readError) throw readError;
-  const mergedProgress = mergeProgress(existing?.progress, progress);
-  const { data, error } = await supabase.from("profiles").update({
-    email: user.email,
-    display_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0],
-    progress: mergedProgress,
-    updated_at: new Date().toISOString()
-  }).eq("user_id", user.id).select("user_id,email,display_name,premium_until,progress").single();
-  if (error) throw error;
-  return data;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { data: existing, error: readError } = await supabase
+      .from("profiles")
+      .select("progress,updated_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (readError) throw readError;
+    const mergedProgress = mergeProgress(existing?.progress, progress);
+    const payload = {
+      email: user.email,
+      display_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0],
+      progress: mergedProgress,
+      updated_at: new Date().toISOString()
+    };
+    if (!existing) {
+      const { data, error } = await supabase.from("profiles")
+        .upsert({ ...payload, user_id: user.id }, { onConflict: "user_id" })
+        .select("user_id,email,display_name,premium_until,progress")
+        .single();
+      if (error) throw error;
+      return data;
+    }
+    const { data, error } = await supabase.from("profiles")
+      .update(payload)
+      .eq("user_id", user.id)
+      .eq("updated_at", existing.updated_at)
+      .select("user_id,email,display_name,premium_until,progress")
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return data;
+  }
+  throw new Error("PROGRESS_SYNC_CONFLICT");
+}
+
+export function syncProgress(user, progress) {
+  const operation = progressSyncQueue.catch(() => {}).then(() => performProgressSync(user, progress));
+  progressSyncQueue = operation.catch(() => {});
+  return operation;
 }
 
 export async function getEntitlement(user) {

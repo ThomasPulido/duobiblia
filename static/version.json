@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.4.0",
+  "latestVersion": "1.5.0",
   "minimumVersion": "1.4.0",
   "title": {
     "es": "Actualización necesaria",
@@ -9,6 +9,6 @@
     "es": "Instala la versión más reciente para seguir usando DuoBiblia.",
     "en": "Install the latest version to keep using DuoBiblia."
   },
-  "androidUrl": "https://github.com/ThomasPulido/DuoBiblia/releases/download/v1.4.0/DuoBiblia-1.4.0.apk",
+  "androidUrl": "https://github.com/ThomasPulido/DuoBiblia/releases/download/v1.5.0/DuoBiblia-1.5.0.apk",
   "iosUrl": "https://apps.apple.com/app/id0000000000"
 }

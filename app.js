@@ -5,12 +5,14 @@ import {
   dateKey,
   featuredVerses,
   getDailyVerse,
+  hasCompletedDailyPrayer,
   getMoodVerse,
   getLocalDayPeriod,
   getVerse,
   getWordHelp,
   moodOptions,
   progressPercent,
+  previousDateKey,
   searchFeatured,
   topics
 } from "./src/core.mjs";
@@ -20,14 +22,17 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 import { BIBLE_VERSIONS, getBibleChapter, searchBible } from "./src/bible-service.mjs";
 import { chooseNextTrack, prayerTracks } from "./src/music.mjs";
 import { translateWithContext } from "./src/translation-service.mjs";
-import { authConfigured, claimStreakReward, getAuthCapabilities, getEntitlement, initializeAuth, sendEmailCode, signInWithGoogle, signOut, syncProgress, verifyEmailCode } from "./src/auth-service.mjs";
+import { authConfigured, claimStreakReward, getAuthCapabilities, getEntitlement, initializeAuth, mergeProgress, sendEmailCode, signInWithGoogle, signOut, syncProgress, verifyEmailCode } from "./src/auth-service.mjs";
 import { externalBillingEnabled, openBoldCheckout } from "./src/billing-service.mjs";
 import { APP_VERSION, checkRequiredUpdate, openRequiredUpdate } from "./src/update-service.mjs";
 import { syncNativePremiumState } from "./src/native-state.mjs";
 import { disablePrayerNotifications, enablePrayerNotifications, initializePrayerNotifications, refreshPrayerNotifications } from "./src/notification-service.mjs";
+import { findReadingPlanChapter, getCompletedBookProgress, getReadingPlanDay, getReadingPlanWeek, nextIncompletePlanDay, READING_PLAN_DAYS } from "./src/reading-plan.mjs";
 
 const STORAGE_KEY = "duobiblia-state-v1";
+const DATA_SCHEMA_VERSION = 2;
 const initialState = {
+  dataSchemaVersion: DATA_SCHEMA_VERSION,
   phase: "splash",
   onboarded: false,
   uiLang: "es",
@@ -47,6 +52,7 @@ const initialState = {
   streak: 0,
   points: 0,
   lastPrayerDate: null,
+  lastPrayerCompletedAt: null,
   moodDate: null,
   favorites: [],
   notes: {},
@@ -59,7 +65,12 @@ const initialState = {
   account: null,
   premium: false,
   premiumUntil: null,
-  readChapters: 3,
+  readChapters: 0,
+  completedPlanDays: [],
+  readingPlanWeek: 1,
+  activePlanDay: null,
+  progressUpdatedAt: null,
+  progressRevision: 0,
   audioPlaying: false,
   musicEnabled: true,
   currentTrackId: null,
@@ -83,8 +94,6 @@ let prayerAudio = null;
 let progressSyncTimer = null;
 let prayerOpenedFromNotification = false;
 let activeSelectionKey = null;
-let selectionTranslationTimer = null;
-const AUTO_TRANSLATE_DELAY_MS = 620;
 const NativeVerseShare = registerPlugin("VerseShare");
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
@@ -96,6 +105,24 @@ function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
     const restored = { ...initialState, ...(saved || {}), phase: "splash", modal: null, audioPlaying: false };
+    restored.completedPlanDays = [...new Set((restored.completedPlanDays || [])
+      .map(Number)
+      .filter((day) => Number.isInteger(day) && day >= 1 && day <= READING_PLAN_DAYS))].sort((a, b) => a - b);
+    restored.readChapters = restored.completedPlanDays.length;
+    restored.readingPlanWeek = Math.max(1, Math.min(53, Number(restored.readingPlanWeek) || 1));
+    if ((Number(saved?.dataSchemaVersion) || 0) < DATA_SCHEMA_VERSION) {
+      restored.completedPlanDays = [];
+      restored.readChapters = 0;
+      restored.readingPlanWeek = 1;
+      restored.activePlanDay = null;
+      if (restored.lastPrayerDate && !restored.lastPrayerCompletedAt) {
+        restored.lastPrayerDate = previousDateKey(new Date());
+      }
+      restored.lastPrayerCompletedAt = null;
+      restored.progressUpdatedAt = new Date().toISOString();
+      restored.progressRevision = (Number(restored.progressRevision) || 0) + 1;
+      restored.dataSchemaVersion = DATA_SCHEMA_VERSION;
+    }
     if (!restored.premiumUntil || new Date(restored.premiumUntil) <= new Date()) restored.premium = false;
     if (restored.lastQuizDate !== dateKey()) {
       restored.quizCompleted = false;
@@ -112,11 +139,44 @@ function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
 }
 
+function progressStateSignature(value) {
+  return JSON.stringify({
+    streak: value.streak,
+    points: value.points,
+    lastPrayerDate: value.lastPrayerDate,
+    lastPrayerCompletedAt: value.lastPrayerCompletedAt,
+    favorites: value.favorites,
+    notes: value.notes,
+    highlights: value.highlights,
+    verseRecords: value.verseRecords,
+    completedPlanDays: value.completedPlanDays,
+    moodDate: value.moodDate,
+    quizCompleted: value.quizCompleted,
+    quizAnswer: value.quizAnswer,
+    lastQuizDate: value.lastQuizDate,
+    lastQuizAdDate: value.lastQuizAdDate,
+    uiLang: value.uiLang,
+    bibleVersion: value.bibleVersion
+  });
+}
+
 function setState(update, shouldPersist = true) {
-  state = { ...state, ...(typeof update === "function" ? update(state) : update) };
+  const previousSignature = progressStateSignature(state);
+  const patch = typeof update === "function" ? update(state) : update;
+  let nextState = { ...state, ...patch };
+  const progressChanged = previousSignature !== progressStateSignature(nextState);
+  const localProgressMutation = shouldPersist && progressChanged && !("progressUpdatedAt" in patch);
+  if (localProgressMutation) {
+    nextState = {
+      ...nextState,
+      progressUpdatedAt: new Date().toISOString(),
+      progressRevision: (Number(state.progressRevision) || 0) + 1
+    };
+  }
+  state = nextState;
   if (shouldPersist) {
     persist();
-    if (state.authUser) {
+    if (state.authUser && localProgressMutation) {
       clearTimeout(progressSyncTimer);
       progressSyncTimer = setTimeout(() => syncProgress(state.authUser, progressForSync()).catch(() => {}), 900);
     }
@@ -124,6 +184,8 @@ function setState(update, shouldPersist = true) {
   syncNativePremiumState(state.premium).catch(() => {});
   render();
 }
+
+persist();
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, (character) => ({
@@ -249,7 +311,7 @@ function highlightClass(key) {
 }
 
 function renderSelectionBar() {
-  return `<div class="selection-toolbar" aria-live="polite"><span class="selection-preview"></span><small class="selection-auto-copy">${dualText("Traducción automática", "Automatic translation")}</small><button class="selection-clear" data-action="clear-selection" aria-label="${text("Limpiar selección", "Clear selection")}">${icon("close")}</button></div>`;
+  return `<div class="selection-toolbar" aria-live="polite"><span class="selection-preview"></span><button data-action="translate-selection">${icon("translate")}<b>${text("Traducir", "Translate")}</b></button><button class="selection-clear" data-action="clear-selection" aria-label="${text("Limpiar selección", "Clear selection")}">${icon("close")}</button></div>`;
 }
 
 function selectionHostAttributes(key, value, sourceLang = state.uiLang) {
@@ -485,7 +547,7 @@ function renderHome() {
   const verse = getDailyVerse();
   const verseRecord = featuredVerseRecord(verse, state.uiLang);
   const prayer = getPrayerExperience();
-  const prayerDone = state.lastPrayerDate === dateKey();
+  const prayerDone = hasCompletedDailyPrayer(state);
   return `
     <section class="reference-home-hero ${highlightClass(verseRecord.key)}" ${verseHostAttributes(verseRecord)}>
       <div class="hero-backdrop" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -550,12 +612,12 @@ function renderBible() {
     <label class="search-box">${icon("search")}<input id="bible-search" type="search" value="${escapeHtml(state.searchQuery || "")}" placeholder="${text(`Buscar en ${version.label}`, `Search ${version.label}`)}" /><kbd>⌘ K</kbd></label>
     ${(state.searchQuery || "") ? `<section class="search-results"><div class="section-title"><h2>${dualText("Resultados", "Results")}</h2><small>${state.fullSearchLoading ? dualText("Buscando…", "Searching…") : results.length}</small></div>${results.length ? results.map(renderSearchResult).join("") : `<div class="empty-state">${state.fullSearchLoading ? dualText("Buscando en 31.102 versículos…", "Searching 31,102 verses…") : dualText("No encontramos resultados.", "No results found.")}</div>`}</section>` : ""}
     <button class="reading-plan-card" data-action="open-reading-plan">
-      <span class="plan-art">365</span><div><span class="eyebrow">${dualText("PLAN DE LECTURA", "READING PLAN")}</span><h3>${dualText("La Biblia en un año", "The Bible in one year")}</h3><p>${dualText("3 de 365 días completados", "3 of 365 days completed")}</p><div class="progress-track"><span style="width:${Math.max(1, state.readChapters / 365 * 100)}%"></span></div></div>${icon("chevron")}
+      <span class="plan-art">365</span><div><span class="eyebrow">${dualText("PLAN DE LECTURA", "READING PLAN")}</span><h3>${dualText("La Biblia en un año", "The Bible in one year")}</h3><p>${dualText(`${state.completedPlanDays.length} de 365 días completados`, `${state.completedPlanDays.length} of 365 days completed`)}</p><div class="progress-track"><span style="width:${state.completedPlanDays.length / READING_PLAN_DAYS * 100}%"></span></div></div>${icon("chevron")}
     </button>
     <section class="book-index">
       <div class="index-tabs"><button class="active">${dualText("Libros", "Books")}</button><button>${dualText("Capítulos", "Chapters")}</button><button>${dualText("Guardados", "Saved")}</button></div>
       <div class="testament-label"><span>${dualText("Antiguo y Nuevo Testamento", "Old & New Testament")}</span><small>${version.label} · ${dualText("completa · 66 libros", "complete · 66 books")}</small></div>
-      ${books.map((book, index) => `<button class="book-row" data-action="open-book" data-book-id="${book.id}"><span class="book-number">${String(index + 1).padStart(2, "0")}</span><div><strong>${dualText(book.es, book.en)}</strong><small>${book.chapters} ${dualText("capítulos", "chapters")}</small></div><span class="book-progress">${["PSA", "JOH"].includes(book.id) ? "6%" : "0%"}</span>${icon("chevron")}</button>`).join("")}
+      ${books.map((book, index) => `<button class="book-row" data-action="open-book" data-book-id="${book.id}"><span class="book-number">${String(index + 1).padStart(2, "0")}</span><div><strong>${dualText(book.es, book.en)}</strong><small>${book.chapters} ${dualText("capítulos", "chapters")}</small></div><span class="book-progress">${getCompletedBookProgress(book.id, state.completedPlanDays)}%</span>${icon("chevron")}</button>`).join("")}
     </section>
     <aside class="license-notice"><strong>${text("Dos Biblias completas y verificadas", "Two complete, verified Bibles")}</strong><p>${text("King James Version en inglés y el texto español extraído exclusivamente de Mi Biblia traducida.pdf: 66 libros y 31.102 referencias en cada idioma.", "The English King James Version and the Spanish text extracted exclusively from Mi Biblia traducida.pdf: 66 books and 31,102 references in each language.")}</p></aside>`;
 }
@@ -572,17 +634,22 @@ function renderKjvChapter() {
   const chapter = state.selectedChapter;
   const verses = state.kjvChapter || [];
   const version = BIBLE_VERSIONS[state.bibleVersion] || BIBLE_VERSIONS.kjv;
+  const planDay = getReadingPlanDay(state.activePlanDay);
+  const planChapterIndex = planDay ? findReadingPlanChapter(planDay.day, book.id, chapter) : -1;
+  const planNavigation = planDay && planChapterIndex >= 0;
+  const planCompleted = planDay ? state.completedPlanDays.includes(planDay.day) : false;
   return `
+    ${planNavigation ? `<section class="plan-session-card"><div><span class="eyebrow">${dualText(`DÍA ${planDay.day} · PLAN ANUAL`, `DAY ${planDay.day} · YEAR PLAN`)}</span><strong>${escapeHtml(planDay.labels[state.uiLang])}</strong><small>${dualText(`Lectura ${planChapterIndex + 1} de ${planDay.chapters.length}`, `Reading ${planChapterIndex + 1} of ${planDay.chapters.length}`)}</small></div><span class="plan-session-progress">${planChapterIndex + 1}/${planDay.chapters.length}</span></section>` : ""}
     <section class="chapter-heading">
       <span>${version.id === "kjv" ? "KING JAMES VERSION" : text("MI BIBLIA TRADUCIDA", "MY TRANSLATED BIBLE")}</span>
       <h1>${book[state.uiLang]} ${chapter}</h1>
-      <p>${text("Selecciona una o varias palabras; la traducción aparece automáticamente.", "Select one or more words; the translation appears automatically.")}</p>
+      <p>${text("Selecciona una o varias palabras y toca Traducir.", "Select one or more words, then tap Translate.")}</p>
       <div class="version-toggle chapter-version-toggle"><button data-action="switch-bible-version" data-version="kjv" class="${version.id === "kjv" ? "active" : ""}">KJV</button><button data-action="switch-bible-version" data-version="mi-biblia" class="${version.id === "mi-biblia" ? "active" : ""}">${text("MI BIBLIA", "MY BIBLE")}</button></div>
     </section>
     <nav class="chapter-switcher">
-      <button data-action="previous-chapter" ${chapter <= 1 ? "disabled" : ""}>← ${text("Anterior", "Previous")}</button>
-      <span>${text("Capítulo", "Chapter")} ${chapter} / ${book.chapters}</span>
-      <button data-action="next-chapter" ${chapter >= book.chapters ? "disabled" : ""}>${text("Siguiente", "Next")} →</button>
+      ${planNavigation
+        ? `<button data-action="plan-previous-reading" ${planChapterIndex <= 0 ? "disabled" : ""}>← ${text("Anterior", "Previous")}</button><span>${dualText(`Plan · ${planChapterIndex + 1} de ${planDay.chapters.length}`, `Plan · ${planChapterIndex + 1} of ${planDay.chapters.length}`)}</span><button data-action="${planChapterIndex === planDay.chapters.length - 1 ? (planCompleted ? "return-reading-plan" : "complete-plan-day") : "plan-next-reading"}">${planChapterIndex === planDay.chapters.length - 1 ? (planCompleted ? text("Volver al plan", "Back to plan") : text("Completar día", "Complete day")) : text("Siguiente", "Next")} →</button>`
+        : `<button data-action="previous-chapter" ${chapter <= 1 ? "disabled" : ""}>← ${text("Anterior", "Previous")}</button><span>${text("Capítulo", "Chapter")} ${chapter} / ${book.chapters}</span><button data-action="next-chapter" ${chapter >= book.chapters ? "disabled" : ""}>${text("Siguiente", "Next")} →</button>`}
     </nav>
     ${state.kjvLoading ? `<div class="chapter-loading">${text("Abriendo el texto bíblico verificado…", "Opening the verified Bible text…")}</div>` : ""}
     ${state.kjvError ? `<div class="empty-state">${escapeHtml(state.kjvError)}</div>` : ""}
@@ -639,7 +706,7 @@ function renderProfile() {
         <h2>${dualText("Tu biblioteca", "Your library")}</h2>
         <button data-action="show-favorites"><span class="setting-icon coral">${spotIllustration("favorite")}</span><div><strong>${dualText("Versículos favoritos", "Favorite verses")}</strong><small>${state.favorites.length} ${dualText("guardados", "saved")}</small></div>${icon("chevron")}</button>
         <button data-action="show-notes"><span class="setting-icon gold">${spotIllustration("note")}</span><div><strong>${dualText("Mis notas", "My notes")}</strong><small>${Object.keys(state.notes).length} ${dualText("notas personales", "personal notes")}</small></div>${icon("chevron")}</button>
-        <button data-action="open-reading-plan"><span class="setting-icon sage">${spotIllustration("plan")}</span><div><strong>${dualText("Plan de lectura", "Reading plan")}</strong><small>${state.readChapters}/365 ${dualText("días", "days")}</small></div>${icon("chevron")}</button>
+        <button data-action="open-reading-plan"><span class="setting-icon sage">${spotIllustration("plan")}</span><div><strong>${dualText("Plan de lectura", "Reading plan")}</strong><small>${state.completedPlanDays.length}/365 ${dualText("días", "days")}</small></div>${icon("chevron")}</button>
       </section>
       <section class="settings-list compact">
         <h2>${dualText("Preferencias", "Preferences")}</h2>
@@ -659,14 +726,14 @@ function renderPrayer() {
   const versionLabel = state.bibleVersion === "mi-biblia" ? text("MI BIBLIA", "MY BIBLE") : "KJV";
   const track = prayerTracks.find((item) => item.id === state.currentTrackId) || prayerTracks[0];
   const secondaryLang = sourceLang === "es" ? "en" : "es";
-  const done = state.lastPrayerDate === dateKey();
+  const done = hasCompletedDailyPrayer(state);
   const verseRecord = featuredVerseRecord(verse, sourceLang);
   return `
     <section class="prayer-hero prayer-${prayer.period}">
       <span class="eyebrow">${dualText("MOMENTO DE ORACIÓN", "PRAYER MOMENT")}<b class="local-time">${new Intl.DateTimeFormat(state.uiLang === "es" ? "es-CO" : "en-US", { hour: "numeric", minute: "2-digit" }).format(new Date())}</b></span>
       <div class="prayer-sun">${icon(prayer.iconName)}</div>
       <h1>${dualObject(prayer.intro)}</h1>
-      <p>${dualText(`Selecciona una o varias palabras en ${sourceLang === "en" ? "inglés" : "español"}; la traducción aparecerá sola.`, `Select one or more ${sourceLang === "en" ? "English" : "Spanish"} words; the translation appears automatically.`, "hero-guidance")}</p>
+      <p>${dualText(`Selecciona una o varias palabras en ${sourceLang === "en" ? "inglés" : "español"} y toca Traducir.`, `Select one or more ${sourceLang === "en" ? "English" : "Spanish"} words, then tap Translate.`, "hero-guidance")}</p>
       <div class="prayer-music-card ${state.audioPlaying ? "playing" : "muted"}"><button class="music-orbit-button" data-action="toggle-audio" aria-label="${state.audioPlaying ? text("Pausar música", "Pause music") : text("Reproducir música", "Play music")}">${icon(state.audioPlaying ? "pause" : "music")}</button><div>${dualText(state.audioPlaying ? "SONANDO AHORA" : "MÚSICA EN PAUSA", state.audioPlaying ? "NOW PLAYING" : "MUSIC PAUSED", "music-status")}<strong>${dualObject(track.label, "track-copy")}</strong></div><button class="music-next-button" data-action="next-track" aria-label="${text("Siguiente canción", "Next track")}">${icon("skip")}</button><i class="music-equalizer"><b></b><b></b><b></b><b></b></i></div>
     </section>
     <article class="devotional-content">
@@ -788,14 +855,16 @@ function renderTopics() {
 }
 
 function renderReadingPlan() {
-  const days = [
-    [1, text("Génesis 1-3", "Genesis 1-3"), true], [2, text("Génesis 4-7", "Genesis 4-7"), true], [3, text("Génesis 8-11", "Genesis 8-11"), true],
-    [4, text("Génesis 12-15", "Genesis 12-15"), false], [5, text("Génesis 16-18", "Genesis 16-18"), false], [6, text("Génesis 19-21", "Genesis 19-21"), false]
-  ];
+  const week = Math.max(1, Math.min(53, Number(state.readingPlanWeek) || 1));
+  const days = getReadingPlanWeek(week);
+  const completed = new Set(state.completedPlanDays.map(Number));
+  const completedCount = completed.size;
+  const weekCompleted = days.filter((day) => completed.has(day.day)).length;
+  const percent = Math.round(completedCount / READING_PLAN_DAYS * 100);
   return `
     <section class="plan-hero"><span class="plan-big-number">365</span><div><p class="eyebrow">${dualText("UN AÑO EN LA PALABRA", "ONE YEAR IN THE WORD")}</p><h1>${dualText("La Biblia completa", "The complete Bible")}</h1><p>${dualText("Lecturas equilibradas de 12–15 minutos al día.", "Balanced readings of 12–15 minutes a day.")}</p></div></section>
-    <section class="plan-summary"><article><strong>${state.readChapters}</strong>${dualText("días leídos", "days read")}</article><article><strong>1%</strong>${dualText("completado", "complete")}</article><article><strong>${state.streak}</strong>${dualText("racha", "streak")}</article></section>
-    <section class="plan-days"><div class="section-title"><h2>${dualText("Semana 1 · Los comienzos", "Week 1 · Beginnings")}</h2><small>3 / 7</small></div>${days.map(([day, reading, done]) => `<button class="plan-day ${done ? "done" : ""}" data-action="plan-day" data-day="${day}"><span>${done ? icon("check") : day}</span><div><strong>${dualText(`Día ${day}`, `Day ${day}`)}</strong><small>${reading}</small></div><em>${done ? dualText("Completado", "Complete") : "12 min"}</em>${icon("chevron")}</button>`).join("")}</section>`;
+    <section class="plan-summary"><article><strong>${completedCount}</strong>${dualText("días leídos", "days read")}</article><article><strong>${percent}%</strong>${dualText("completado", "complete")}</article><article><strong>${state.streak}</strong>${dualText("racha", "streak")}</article></section>
+    <section class="plan-days"><div class="plan-week-heading"><button data-action="plan-week" data-delta="-1" ${week <= 1 ? "disabled" : ""} aria-label="${text("Semana anterior", "Previous week")}">${icon("back")}</button><div><h2>${dualText(`Semana ${week} de 53`, `Week ${week} of 53`)}</h2><small>${weekCompleted} / ${days.length} ${dualText("días completados", "days complete")}</small></div><button data-action="plan-week" data-delta="1" ${week >= 53 ? "disabled" : ""} aria-label="${text("Semana siguiente", "Next week")}">${icon("chevron")}</button></div>${days.map((day) => { const done = completed.has(day.day); return `<button class="plan-day ${done ? "done" : ""}" data-action="plan-day" data-day="${day.day}"><span>${done ? icon("check") : day.day}</span><div><strong>${dualText(`Día ${day.day}`, `Day ${day.day}`)}</strong><small>${escapeHtml(day.labels[state.uiLang])}</small></div><em>${done ? text("Completado", "Complete") : `${day.minutes} min`}</em>${icon("chevron")}</button>`; }).join("")}</section>`;
 }
 
 function renderModal() {
@@ -876,16 +945,26 @@ function showToast(message) {
 
 function progressForSync() {
   return {
+    dataSchemaVersion: DATA_SCHEMA_VERSION,
     streak: state.streak,
     points: state.points,
     lastPrayerDate: state.lastPrayerDate,
+    lastPrayerCompletedAt: state.lastPrayerCompletedAt,
     favorites: state.favorites,
     notes: state.notes,
     highlights: state.highlights,
     verseRecords: state.verseRecords,
-    readChapters: state.readChapters,
+    readChapters: state.completedPlanDays.length,
+    completedPlanDays: state.completedPlanDays,
+    moodDate: state.moodDate,
+    quizCompleted: state.quizCompleted,
+    quizAnswer: state.quizAnswer,
+    lastQuizDate: state.lastQuizDate,
+    lastQuizAdDate: state.lastQuizAdDate,
     uiLang: state.uiLang,
-    bibleVersion: state.bibleVersion
+    bibleVersion: state.bibleVersion,
+    progressUpdatedAt: state.progressUpdatedAt,
+    progressRevision: state.progressRevision
   };
 }
 
@@ -902,7 +981,7 @@ async function handleAuthSession(session) {
       entitlement = await claimStreakReward(user);
     }
     const name = profile?.display_name || user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || text("Lector", "Reader");
-    const syncedProgress = profile?.progress || progressForSync();
+    const syncedProgress = mergeProgress(profile?.progress || {}, progressForSync());
     const completingAuth = ["account", "email-code"].includes(state.modal?.type);
     setState({
       authUser: user,
@@ -912,11 +991,20 @@ async function handleAuthSession(session) {
       streak: syncedProgress.streak ?? state.streak,
       points: syncedProgress.points ?? state.points,
       lastPrayerDate: syncedProgress.lastPrayerDate ?? state.lastPrayerDate,
+      lastPrayerCompletedAt: syncedProgress.lastPrayerCompletedAt ?? state.lastPrayerCompletedAt,
       favorites: syncedProgress.favorites || state.favorites,
       notes: syncedProgress.notes || state.notes,
       highlights: syncedProgress.highlights || state.highlights,
       verseRecords: syncedProgress.verseRecords || state.verseRecords,
-      readChapters: syncedProgress.readChapters ?? state.readChapters,
+      completedPlanDays: syncedProgress.completedPlanDays || state.completedPlanDays,
+      readChapters: (syncedProgress.completedPlanDays || state.completedPlanDays).length,
+      moodDate: syncedProgress.moodDate ?? state.moodDate,
+      quizCompleted: syncedProgress.quizCompleted ?? state.quizCompleted,
+      quizAnswer: syncedProgress.quizAnswer ?? state.quizAnswer,
+      lastQuizDate: syncedProgress.lastQuizDate ?? state.lastQuizDate,
+      lastQuizAdDate: syncedProgress.lastQuizAdDate ?? state.lastQuizAdDate,
+      progressUpdatedAt: syncedProgress.progressUpdatedAt || state.progressUpdatedAt,
+      progressRevision: syncedProgress.progressRevision ?? state.progressRevision,
       authLoading: false,
       authError: null,
       modal: state.pendingPremium || state.pendingStreakReward ? { type: "premium" } : (completingAuth ? { type: "account-success" } : state.modal),
@@ -964,6 +1052,32 @@ async function openBibleChapter(bookId, chapter = 1, verse = null, versionId = s
   }
 }
 
+function openReadingPlan() {
+  const nextDay = nextIncompletePlanDay(state.completedPlanDays);
+  setState({
+    route: "reading-plan",
+    readingPlanWeek: Math.ceil(nextDay / 7),
+    activePlanDay: null,
+    modal: null
+  });
+  window.scrollTo({ top: 0, behavior: "instant" });
+}
+
+async function openPlanDay(day) {
+  const planDay = getReadingPlanDay(day);
+  if (!planDay?.chapters.length) return;
+  const first = planDay.chapters[0];
+  setState({ activePlanDay: planDay.day, readingPlanWeek: planDay.week });
+  await openBibleChapter(first.bookId, first.chapter);
+}
+
+async function openPlanChapterAt(index) {
+  const planDay = getReadingPlanDay(state.activePlanDay);
+  const chapter = planDay?.chapters[index];
+  if (!chapter) return;
+  await openBibleChapter(chapter.bookId, chapter.chapter);
+}
+
 let bibleSearchTimer;
 async function runFullBibleSearch(query) {
   if (!query.trim()) {
@@ -991,8 +1105,6 @@ function previousOrNextVerse(direction) {
 }
 
 function clearSelectionUI() {
-  clearTimeout(selectionTranslationTimer);
-  selectionTranslationTimer = null;
   document.querySelectorAll(".word-token.selected").forEach((token) => token.classList.remove("selected"));
   document.querySelectorAll("[data-verse-key].has-selection").forEach((host) => host.classList.remove("has-selection"));
   document.querySelectorAll(".selection-preview").forEach((preview) => { preview.textContent = ""; });
@@ -1011,22 +1123,6 @@ function updateSelectionUI(host) {
   activeSelectionKey = host.dataset.verseKey;
   host.classList.add("has-selection");
   if (preview) preview.textContent = selected.map((token) => token.dataset.word).join(" ");
-}
-
-function scheduleAutomaticTranslation(host) {
-  clearTimeout(selectionTranslationTimer);
-  const selected = [...host.querySelectorAll(".word-token.selected")];
-  if (!selected.length) return;
-  selectionTranslationTimer = setTimeout(async () => {
-    if (!document.documentElement.contains(host)) return;
-    const currentSelection = [...host.querySelectorAll(".word-token.selected")]
-      .map((token) => token.dataset.word)
-      .join(" ");
-    const context = host.dataset.verseContext || host.dataset.verseText || currentSelection;
-    const sourceLang = host.dataset.sourceLang || "en";
-    selectionTranslationTimer = null;
-    await openContextTranslation(currentSelection, context, sourceLang);
-  }, AUTO_TRANSLATE_DELAY_MS);
 }
 
 async function openContextTranslation(selection, context, sourceLang = "en") {
@@ -1245,8 +1341,6 @@ function stopPrayerMusic() {
 
 function suspendActiveMedia() {
   stopPrayerMusic();
-  clearTimeout(selectionTranslationTimer);
-  selectionTranslationTimer = null;
   if ("speechSynthesis" in window) speechSynthesis.cancel();
 }
 
@@ -1270,7 +1364,12 @@ app.addEventListener("click", async (event) => {
   } else if (action === "nav") {
     navigate(actionTarget.dataset.route);
   } else if (action === "back") {
-    navigate(["reader", "chapter", "reading-plan"].includes(state.route) ? "bible" : "home");
+    if (state.route === "chapter" && state.activePlanDay) {
+      setState({ route: "reading-plan", activePlanDay: null, modal: null });
+      window.scrollTo({ top: 0, behavior: "instant" });
+    } else {
+      navigate(["reader", "chapter", "reading-plan"].includes(state.route) ? "bible" : "home");
+    }
   } else if (action === "open-reader") {
     openReader(actionTarget.dataset.verse);
   } else if (action === "read-collection-item") {
@@ -1287,13 +1386,19 @@ app.addEventListener("click", async (event) => {
     setState({ selectedTopic: actionTarget.dataset.topic, route: state.route === "topics" ? "topics" : "topics" });
     window.scrollTo({ top: 0, behavior: "smooth" });
   } else if (action === "open-reading-plan") {
-    navigate("reading-plan");
+    openReadingPlan();
   } else if (action === "open-book") {
     await openBibleChapter(actionTarget.dataset.bookId, 1);
   } else if (action === "open-bible-verse") {
     await openBibleChapter(actionTarget.dataset.bookId, actionTarget.dataset.chapter, actionTarget.dataset.verseNumber, actionTarget.dataset.version);
   } else if (action === "previous-chapter" || action === "next-chapter") {
     await openBibleChapter(state.selectedBookId, state.selectedChapter + (action === "next-chapter" ? 1 : -1));
+  } else if (action === "plan-previous-reading" || action === "plan-next-reading") {
+    const index = findReadingPlanChapter(state.activePlanDay, state.selectedBookId, state.selectedChapter);
+    await openPlanChapterAt(index + (action === "plan-next-reading" ? 1 : -1));
+  } else if (action === "return-reading-plan") {
+    setState({ route: "reading-plan", activePlanDay: null, modal: null });
+    window.scrollTo({ top: 0, behavior: "instant" });
   } else if (action === "switch-bible-version") {
     const version = actionTarget.dataset.version;
     if (state.route === "chapter") await openBibleChapter(state.selectedBookId, state.selectedChapter, state.selectedKjvVerse, version);
@@ -1307,7 +1412,13 @@ app.addEventListener("click", async (event) => {
     if (activeSelectionKey && activeSelectionKey !== host.dataset.verseKey) clearSelectionUI();
     actionTarget.classList.toggle("selected");
     updateSelectionUI(host);
-    scheduleAutomaticTranslation(host);
+  } else if (action === "translate-selection") {
+    const host = actionTarget.closest("[data-verse-key]");
+    if (!host) return;
+    const selection = [...host.querySelectorAll(".word-token.selected")]
+      .map((token) => token.dataset.word)
+      .join(" ");
+    await openContextTranslation(selection, host.dataset.verseContext || host.dataset.verseText || selection, host.dataset.sourceLang || "en");
   } else if (action === "clear-selection") {
     clearSelectionUI();
   } else if (action === "translate-word") {
@@ -1367,7 +1478,7 @@ app.addEventListener("click", async (event) => {
   } else if (action === "amen") {
     const result = completeDailyPrayer(state);
     if (!result.newlyCompleted) return showToast(text("Tu oración de hoy ya está completa", "Today's prayer is already complete"));
-    setState({ streak: result.streak, points: result.points, lastPrayerDate: result.lastPrayerDate, modal: null });
+    setState({ streak: result.streak, points: result.points, lastPrayerDate: result.lastPrayerDate, lastPrayerCompletedAt: result.lastPrayerCompletedAt, modal: null });
     await showAchievementInterstitial({ premium: state.premium });
     setState({ modal: { type: "streak" } }, false);
   } else if (action === "close-streak") {
@@ -1533,9 +1644,27 @@ app.addEventListener("click", async (event) => {
       speechSynthesis.speak(utterance);
     }
   } else if (action === "plan-day") {
-    const day = Number(actionTarget.dataset.day);
-    if (day <= 3) showToast(text("Este día ya está completado", "This day is already complete"));
-    else openReader("john-14-27");
+    await openPlanDay(Number(actionTarget.dataset.day));
+  } else if (action === "plan-week") {
+    const readingPlanWeek = Math.max(1, Math.min(53, state.readingPlanWeek + Number(actionTarget.dataset.delta || 0)));
+    setState({ readingPlanWeek });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } else if (action === "complete-plan-day") {
+    const planDay = getReadingPlanDay(state.activePlanDay);
+    if (!planDay) return;
+    const alreadyCompleted = state.completedPlanDays.includes(planDay.day);
+    const completedPlanDays = [...new Set([...state.completedPlanDays, planDay.day])].sort((a, b) => a - b);
+    setState({
+      completedPlanDays,
+      readChapters: completedPlanDays.length,
+      points: alreadyCompleted ? state.points : state.points + 25,
+      readingPlanWeek: planDay.week,
+      activePlanDay: null,
+      route: "reading-plan",
+      modal: null
+    });
+    showToast(text(`Día ${planDay.day} completado · +25 XP`, `Day ${planDay.day} complete · +25 XP`));
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
 });
 

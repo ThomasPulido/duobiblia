@@ -17,8 +17,8 @@ android {
         applicationId "com.duobiblia.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 5
-        versionName "1.4.0"
+        versionCode 6
+        versionName "1.5.0"
         buildConfigField "boolean", "USE_PRODUCTION_ADS", useProductionAds.toString()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

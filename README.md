@@ -99,7 +99,7 @@ Ejemplo:
 
 ```sql
 update public.app_versions
-set latest_version = '1.4.0', minimum_version = '1.4.0', updated_at = now()
+set latest_version = '1.5.0', minimum_version = '1.5.0', updated_at = now()
 where platform = 'android';
 ```
 
@@ -109,7 +109,7 @@ Para distribución directa en Android, aplicar también `supabase/migrations/202
 
 ```powershell
 $env:SUPABASE_SERVICE_ROLE_KEY = "CLAVE_PRIVADA_SOLO_EN_TU_PC"
-./scripts/publish-apk.ps1 -ProjectUrl "https://TU-PROYECTO.supabase.co" -ApkPath "./DuoBiblia-1.4.0.apk" -Version "1.4.0" -MinimumVersion "1.4.0"
+./scripts/publish-apk.ps1 -ProjectUrl "https://TU-PROYECTO.supabase.co" -ApkPath "./DuoBiblia-1.5.0.apk" -Version "1.5.0" -MinimumVersion "1.5.0"
 ```
 
 El script sube primero el APK y solo después cambia la versión obligatoria, evitando dejar instalaciones bloqueadas sin archivo descargable.

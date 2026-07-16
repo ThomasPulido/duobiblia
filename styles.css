@@ -1112,9 +1112,6 @@ body.dark .ritual-night { color: #c6d8f5; background: #293747; }
 
 .devotional-interactive-text { color: var(--ink) !important; }
 .devotional-interactive-text .word-token { color: inherit; }
-.selection-auto-copy { flex: 0 0 auto; color: var(--ink-soft); font-size: 8px; text-align: right; }
-.selection-auto-copy .dual-copy { align-items: flex-end; }
-.selection-auto-copy .dual-copy > small { font-size: 6px; }
 
 .onboarding-screen,
 .mood-screen {
@@ -1161,7 +1158,7 @@ body.dark .ritual-night { color: #c6d8f5; background: #293747; }
   .brand-button img { width: 30px; height: 30px; }
   .ritual-period-icon { width: 54px; height: 54px; flex-basis: 54px; border-radius: 17px; }
   .morning-card { gap: 10px; padding: 13px; }
-  .selection-auto-copy { display: none; }
+  .selection-toolbar button b { display: none; }
 }
 
 @media (max-height: 720px) {
@@ -1192,4 +1189,27 @@ body.dark .ritual-night { color: #c6d8f5; background: #293747; }
   .mood-heading { align-self: center; padding: 8px 0; }
   .mood-grid { align-self: center; grid-template-columns: repeat(3, 1fr); }
   .mood-footer { grid-column: 1 / -1; margin-top: 8px; }
+}
+
+/* Functional 365-day plan and in-reader progress. */
+.plan-week-heading { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; gap: 10px; align-items: center; margin-bottom: 8px; }
+.plan-week-heading > div { min-width: 0; text-align: center; }
+.plan-week-heading h2 { margin: 0; font-family: var(--serif); font-size: 20px; font-weight: 500; }
+.plan-week-heading small { display: block; margin-top: 4px; color: var(--ink-soft); font-size: 9px; }
+.plan-week-heading button { display: grid; place-items: center; width: 42px; height: 42px; color: var(--ink); border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.plan-week-heading button:disabled { opacity: .3; }
+.plan-week-heading .icon { width: 18px; }
+.plan-day > div { min-width: 0; }
+.plan-day small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-session-card { display: flex; gap: 14px; align-items: center; justify-content: space-between; margin: 20px 0 0; padding: 15px 16px; color: #fff; border-radius: 18px; background: linear-gradient(135deg, var(--green-deep), #315d4c); box-shadow: var(--shadow-sm); }
+.plan-session-card > div { display: grid; gap: 4px; min-width: 0; }
+.plan-session-card .eyebrow { color: #ebce88; }
+.plan-session-card strong { overflow: hidden; font-family: var(--serif); font-size: 16px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.plan-session-card small { color: rgba(255,255,255,.7); font-size: 9px; }
+.plan-session-progress { display: grid; place-items: center; flex: 0 0 46px; width: 46px; height: 46px; color: var(--green-deep); font-size: 11px; font-weight: 900; border-radius: 15px; background: var(--gold); }
+
+@media (max-width: 360px) {
+  .plan-day { gap: 8px; }
+  .plan-day em { display: none; }
+  .plan-session-card { padding: 13px; }
 }

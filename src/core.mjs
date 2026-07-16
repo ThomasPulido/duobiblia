@@ -198,15 +198,25 @@ export function previousDateKey(date = new Date()) {
 
 export function completeDailyPrayer(progress, now = new Date()) {
   const today = dateKey(now);
-  if (progress.lastPrayerDate === today) return { ...progress, newlyCompleted: false };
+  if (hasCompletedDailyPrayer(progress, now)) return { ...progress, newlyCompleted: false };
   const continued = progress.lastPrayerDate === previousDateKey(now);
   return {
     ...progress,
     streak: continued ? progress.streak + 1 : 1,
     points: progress.points + 50,
     lastPrayerDate: today,
+    lastPrayerCompletedAt: now.toISOString(),
     newlyCompleted: true
   };
+}
+
+export function hasCompletedDailyPrayer(progress, now = new Date()) {
+  const completedAt = progress?.lastPrayerCompletedAt;
+  if (completedAt) {
+    const parsed = new Date(completedAt);
+    if (!Number.isNaN(parsed.getTime())) return dateKey(parsed) === dateKey(now);
+  }
+  return progress?.lastPrayerDate === dateKey(now);
 }
 
 export function getVerse(id) {
