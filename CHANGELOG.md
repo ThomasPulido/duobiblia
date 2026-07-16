@@ -1,5 +1,15 @@
 # Historial de versiones
 
+## 1.6.0 — Oraciones y retos realmente diarios
+
+- Estado de oración separado por fecha local y momento del día; una marca antigua de Google ya no puede bloquear el ritual actual.
+- Migración segura del progreso anterior y unión de completados por cuenta sin sobrescribir rachas, notas o resaltados.
+- 365 días automáticos con oración de mañana, tarde y noche: 1.095 experiencias bilingües sin carga manual diaria.
+- Dos retos nuevos cada día durante todo el año: uno para aprender el idioma y otro para conocer la Biblia.
+- Encabezado del inicio transparente y centrado sobre el fondo rotativo, sin logo ni bloque verde independiente.
+- Selector simplificado a “Biblia en inglés” y “Biblia en español”; los nombres técnicos quedan dentro de información de versiones.
+- Modelos inglés–español preparados en segundo plano y caché local para acelerar las traducciones siguientes.
+
 ## 1.5.0 — Plan anual y progreso confiable
 
 - Plan real de 365 días que recorre los 1.189 capítulos de la Biblia en orden, sin omisiones ni duplicados.

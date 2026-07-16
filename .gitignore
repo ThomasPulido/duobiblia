@@ -13,4 +13,5 @@ tmp/
 .toolchains/
 .signing/
 releases/*.apk
+releases/*.aab
 android/keystore.properties

@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { books, completeDailyPrayer, dateKey, featuredVerses, getDailyVerse, getLocalDayPeriod, getMoodVerse, getWordHelp, hasCompletedDailyPrayer, normalizeWord, progressPercent, searchFeatured, wordDictionary } from "../src/core.mjs";
+import { books, completeDailyPrayer, completePrayer, dateKey, featuredVerses, getDailyVerse, getLocalDayPeriod, getMoodVerse, getWordHelp, hasCompletedDailyPrayer, hasCompletedPrayer, normalizeWord, progressPercent, searchFeatured, wordDictionary } from "../src/core.mjs";
+import { ANNUAL_DEVOTIONALS, getAnnualDevotional } from "../src/daily-content.mjs";
+import { ANNUAL_BIBLE_QUIZZES, ANNUAL_LANGUAGE_QUIZZES, ANNUAL_QUIZ_SETS, getDailyQuizSet } from "../src/annual-quizzes.mjs";
 import { chooseNextTrack, prayerTracks } from "../src/music.mjs";
 import { mergeProgress } from "../src/account-core.mjs";
 import { compareVersions } from "../src/update-service.mjs";
@@ -19,10 +21,25 @@ test("completar la oración inicia una racha y entrega puntos", () => {
 });
 
 test("completar dos veces el mismo día no duplica la recompensa", () => {
-  const result = completeDailyPrayer({ streak: 8, points: 450, lastPrayerDate: "2026-07-13" }, new Date(2026, 6, 13, 18));
-  assert.equal(result.streak, 8);
-  assert.equal(result.points, 450);
-  assert.equal(result.newlyCompleted, false);
+  const first = completePrayer({ streak: 8, points: 450, lastPrayerDate: "2026-07-12", prayerCompletions: {} }, new Date(2026, 6, 13, 8), "morning");
+  const duplicate = completePrayer(first, new Date(2026, 6, 13, 10), "morning");
+  assert.equal(duplicate.streak, 9);
+  assert.equal(duplicate.points, 500);
+  assert.equal(duplicate.newlyCompleted, false);
+});
+
+test("mañana y noche son rituales distintos pero la racha sube una sola vez", () => {
+  const morning = completePrayer({ streak: 8, points: 450, lastPrayerDate: "2026-07-12", prayerCompletions: {} }, new Date(2026, 6, 13, 8), "morning");
+  const night = completePrayer(morning, new Date(2026, 6, 13, 22), "night");
+  assert.equal(night.newlyCompleted, true);
+  assert.equal(night.streak, 9);
+  assert.equal(night.points, 550);
+  assert.equal(hasCompletedPrayer(night, new Date(2026, 6, 13, 22), "night"), true);
+});
+
+test("una fecha heredada de la nube no bloquea una oración nueva", () => {
+  const legacyCloud = { streak: 9, points: 500, lastPrayerDate: "2026-07-15", lastPrayerCompletedAt: "2026-07-15T01:00:00.000Z" };
+  assert.equal(hasCompletedPrayer(legacyCloud, new Date(2026, 6, 15, 22), "night"), false);
 });
 
 test("un día consecutivo aumenta la racha", () => {
@@ -87,6 +104,34 @@ test("la oración se adapta a la hora local del dispositivo", () => {
   assert.equal(getLocalDayPeriod(new Date(2026, 6, 13, 15)), "afternoon");
   assert.equal(getLocalDayPeriod(new Date(2026, 6, 13, 22)), "night");
   assert.equal(getLocalDayPeriod(new Date(2026, 6, 13, 3)), "night");
+});
+
+test("hay contenido automático distinto para los 365 días y tres momentos diarios", () => {
+  assert.equal(ANNUAL_DEVOTIONALS.length, 365);
+  for (const period of ["morning", "afternoon", "night"]) {
+    assert.equal(new Set(ANNUAL_DEVOTIONALS.map((day) => day[period].id)).size, 365);
+    assert.equal(new Set(ANNUAL_DEVOTIONALS.map((day) => day[period].prayer.es)).size, 365);
+  }
+  assert.equal(getAnnualDevotional(new Date(2026, 6, 15, 8)).period, "morning");
+  assert.equal(getAnnualDevotional(new Date(2026, 6, 15, 22)).period, "night");
+});
+
+test("cada día del año tiene un quiz de idioma y otro de la Biblia", () => {
+  assert.equal(ANNUAL_LANGUAGE_QUIZZES.length, 365);
+  assert.equal(ANNUAL_BIBLE_QUIZZES.length, 365);
+  assert.equal(ANNUAL_QUIZ_SETS.length, 365);
+  for (const set of ANNUAL_QUIZ_SETS) {
+    assert.equal(set.language.category, "language");
+    assert.equal(set.bible.category, "bible");
+    for (const quiz of [set.language, set.bible]) {
+      assert.ok(quiz.options.length >= 3);
+      assert.ok(quiz.correctIndex >= 0 && quiz.correctIndex < quiz.options.length);
+    }
+  }
+  const today = getDailyQuizSet(new Date(2026, 6, 15));
+  const tomorrow = getDailyQuizSet(new Date(2026, 6, 16));
+  assert.notEqual(today.language.id, tomorrow.language.id);
+  assert.notEqual(today.bible.id, tomorrow.bible.id);
 });
 
 test("la música aleatoria evita repetir inmediatamente", () => {
@@ -174,6 +219,30 @@ test("el cambio local más reciente de color no es sobrescrito por una copia ant
   assert.equal(merged.progressRevision, 5);
 });
 
+test("la nube antigua no puede reponer la oración falsa del día actual", () => {
+  const cloudV2 = {
+    dataSchemaVersion: 2,
+    streak: 9,
+    lastPrayerDate: "2026-07-15",
+    lastPrayerCompletedAt: "2026-07-15T01:00:00.000Z",
+    progressUpdatedAt: "2026-07-15T10:05:00.000Z"
+  };
+  const migratedLocal = {
+    dataSchemaVersion: 3,
+    streak: 9,
+    lastPrayerDate: "2026-07-14",
+    lastPrayerCompletedAt: null,
+    prayerCompletions: {},
+    progressUpdatedAt: "2026-07-15T10:00:00.000Z"
+  };
+  const merged = mergeProgress(cloudV2, migratedLocal);
+  assert.equal(merged.dataSchemaVersion, 3);
+  assert.equal(merged.lastPrayerDate, "2026-07-14");
+  assert.deepEqual(merged.prayerCompletions, {});
+  const completed = completePrayer(merged, new Date(2026, 6, 15, 22), "night");
+  assert.equal(completed.streak, 10);
+});
+
 test("el plan anual cubre los 1.189 capítulos exactamente una vez", () => {
   const expected = books.flatMap((book) => Array.from({ length: book.chapters }, (_, index) => `${book.id}:${index + 1}`));
   const actual = YEAR_READING_PLAN.flatMap((day) => day.chapters.map((chapter) => `${chapter.bookId}:${chapter.chapter}`));
@@ -194,8 +263,8 @@ test("la versión mínima permite bloquear instalaciones antiguas", () => {
   assert.equal(compareVersions("2.0.0", "1.9.9"), 1);
 });
 
-test("la versión 1.5.0 usa el nuevo enlace de Bold y los anuncios iOS entregados", () => {
-  assert.equal(APP_VERSION, "1.5.0");
+test("la versión 1.6.0 usa el nuevo enlace de Bold y los anuncios iOS entregados", () => {
+  assert.equal(APP_VERSION, "1.6.0");
   assert.equal(BOLD_CHECKOUT_URL, "https://checkout.bold.co/payment/LNK_84NNU7YDX9");
   assert.equal(ADMOB_IDS.iosAppId, "ca-app-pub-8007313797348394~9653183215");
   assert.equal(ADMOB_IDS.appOpen.iosProduction, "ca-app-pub-8007313797348394/7027019877");

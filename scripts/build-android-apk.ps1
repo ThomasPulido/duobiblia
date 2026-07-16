@@ -55,6 +55,8 @@ try {
     try {
         & '.\gradlew.bat' assembleRelease --no-daemon
         if ($LASTEXITCODE -ne 0) { throw 'La compilación Android falló.' }
+        & '.\gradlew.bat' bundleRelease --no-daemon
+        if ($LASTEXITCODE -ne 0) { throw 'La compilación del Android App Bundle falló.' }
     } finally {
         Pop-Location
     }
@@ -65,11 +67,15 @@ try {
     $sourceApk = Join-Path $workspace 'android\app\build\outputs\apk\release\app-release.apk'
     $destinationApk = Join-Path $releaseDirectory "DuoBiblia-$version.apk"
     Copy-Item -LiteralPath $sourceApk -Destination $destinationApk -Force
+    $sourceBundle = Join-Path $workspace 'android\app\build\outputs\bundle\release\app-release.aab'
+    $destinationBundle = Join-Path $releaseDirectory "DuoBiblia-$version.aab"
+    Copy-Item -LiteralPath $sourceBundle -Destination $destinationBundle -Force
 
     $apksigner = Join-Path $sdk 'build-tools\36.0.0\apksigner.bat'
     & $apksigner verify --print-certs $destinationApk
     if ($LASTEXITCODE -ne 0) { throw 'La verificación de la firma falló.' }
     Write-Host "APK listo: $destinationApk"
+    Write-Host "AAB listo para Google Play: $destinationBundle"
 } finally {
     if ($passwordBytes) { [Array]::Clear($passwordBytes, 0, $passwordBytes.Length) }
     if ($protectedBytes) { [Array]::Clear($protectedBytes, 0, $protectedBytes.Length) }
