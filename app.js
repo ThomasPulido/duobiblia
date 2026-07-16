@@ -1,11 +1,11 @@
 import {
   STREAK_GOAL,
   books,
-  completeDailyPrayer,
+  completePrayer,
   dateKey,
   featuredVerses,
   getDailyVerse,
-  hasCompletedDailyPrayer,
+  hasCompletedPrayer,
   getMoodVerse,
   getLocalDayPeriod,
   getVerse,
@@ -16,12 +16,14 @@ import {
   searchFeatured,
   topics
 } from "./src/core.mjs";
+import { getAnnualDevotional } from "./src/daily-content.mjs";
+import { getDailyQuizSet } from "./src/annual-quizzes.mjs";
 import { initializeMobileAds, showAchievementInterstitial } from "./src/ads.mjs";
 import { App as MobileApp } from "@capacitor/app";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { BIBLE_VERSIONS, getBibleChapter, searchBible } from "./src/bible-service.mjs";
 import { chooseNextTrack, prayerTracks } from "./src/music.mjs";
-import { translateWithContext } from "./src/translation-service.mjs";
+import { prepareTranslationModels, translateWithContext } from "./src/translation-service.mjs";
 import { authConfigured, claimStreakReward, getAuthCapabilities, getEntitlement, initializeAuth, mergeProgress, sendEmailCode, signInWithGoogle, signOut, syncProgress, verifyEmailCode } from "./src/auth-service.mjs";
 import { externalBillingEnabled, openBoldCheckout } from "./src/billing-service.mjs";
 import { APP_VERSION, checkRequiredUpdate, openRequiredUpdate } from "./src/update-service.mjs";
@@ -30,7 +32,7 @@ import { disablePrayerNotifications, enablePrayerNotifications, initializePrayer
 import { findReadingPlanChapter, getCompletedBookProgress, getReadingPlanDay, getReadingPlanWeek, nextIncompletePlanDay, READING_PLAN_DAYS } from "./src/reading-plan.mjs";
 
 const STORAGE_KEY = "duobiblia-state-v1";
-const DATA_SCHEMA_VERSION = 2;
+const DATA_SCHEMA_VERSION = 3;
 const initialState = {
   dataSchemaVersion: DATA_SCHEMA_VERSION,
   phase: "splash",
@@ -53,6 +55,7 @@ const initialState = {
   points: 0,
   lastPrayerDate: null,
   lastPrayerCompletedAt: null,
+  prayerCompletions: {},
   moodDate: null,
   favorites: [],
   notes: {},
@@ -62,6 +65,10 @@ const initialState = {
   quizAnswer: null,
   lastQuizDate: null,
   lastQuizAdDate: null,
+  dailyQuizDate: null,
+  dailyQuizAnswers: { language: null, bible: null },
+  dailyQuizCompleted: { language: false, bible: false },
+  quizStats: { answered: 0, correct: 0, wordsLearned: 0 },
   account: null,
   premium: false,
   premiumUntil: null,
@@ -110,21 +117,32 @@ function loadState() {
       .filter((day) => Number.isInteger(day) && day >= 1 && day <= READING_PLAN_DAYS))].sort((a, b) => a - b);
     restored.readChapters = restored.completedPlanDays.length;
     restored.readingPlanWeek = Math.max(1, Math.min(53, Number(restored.readingPlanWeek) || 1));
+    restored.prayerCompletions = { ...(restored.prayerCompletions || {}) };
+    restored.dailyQuizAnswers = { language: null, bible: null, ...(restored.dailyQuizAnswers || {}) };
+    restored.dailyQuizCompleted = { language: false, bible: false, ...(restored.dailyQuizCompleted || {}) };
+    restored.quizStats = { answered: 0, correct: 0, wordsLearned: 0, ...(restored.quizStats || {}) };
     if ((Number(saved?.dataSchemaVersion) || 0) < DATA_SCHEMA_VERSION) {
       restored.completedPlanDays = [];
       restored.readChapters = 0;
       restored.readingPlanWeek = 1;
       restored.activePlanDay = null;
-      if (restored.lastPrayerDate && !restored.lastPrayerCompletedAt) {
-        restored.lastPrayerDate = previousDateKey(new Date());
-      }
+      // Version 2 stored only one cloud-synced date. It could falsely block a
+      // new morning/night ritual, so it is deliberately not promoted.
+      restored.prayerCompletions = {};
+      restored.lastPrayerDate = restored.lastPrayerDate ? previousDateKey(new Date()) : null;
       restored.lastPrayerCompletedAt = null;
+      restored.dailyQuizDate = dateKey();
+      restored.dailyQuizAnswers = { language: null, bible: null };
+      restored.dailyQuizCompleted = { language: false, bible: false };
       restored.progressUpdatedAt = new Date().toISOString();
       restored.progressRevision = (Number(restored.progressRevision) || 0) + 1;
       restored.dataSchemaVersion = DATA_SCHEMA_VERSION;
     }
     if (!restored.premiumUntil || new Date(restored.premiumUntil) <= new Date()) restored.premium = false;
-    if (restored.lastQuizDate !== dateKey()) {
+    if (restored.dailyQuizDate !== dateKey()) {
+      restored.dailyQuizDate = dateKey();
+      restored.dailyQuizAnswers = { language: null, bible: null };
+      restored.dailyQuizCompleted = { language: false, bible: false };
       restored.quizCompleted = false;
       restored.quizAnswer = null;
     }
@@ -145,6 +163,7 @@ function progressStateSignature(value) {
     points: value.points,
     lastPrayerDate: value.lastPrayerDate,
     lastPrayerCompletedAt: value.lastPrayerCompletedAt,
+    prayerCompletions: value.prayerCompletions,
     favorites: value.favorites,
     notes: value.notes,
     highlights: value.highlights,
@@ -155,6 +174,10 @@ function progressStateSignature(value) {
     quizAnswer: value.quizAnswer,
     lastQuizDate: value.lastQuizDate,
     lastQuizAdDate: value.lastQuizAdDate,
+    dailyQuizDate: value.dailyQuizDate,
+    dailyQuizAnswers: value.dailyQuizAnswers,
+    dailyQuizCompleted: value.dailyQuizCompleted,
+    quizStats: value.quizStats,
     uiLang: value.uiLang,
     bibleVersion: value.bibleVersion
   });
@@ -442,6 +465,17 @@ function renderShell() {
 }
 
 function renderTopBar() {
+  if (state.route === "home") {
+    return `
+      <header class="top-bar top-bar-home" aria-label="${text("Estado diario", "Daily status")}">
+        <div class="top-stats home-status-glass">
+          <button data-action="switch-language" class="stat-chip language-chip" aria-label="${text("Cambiar a inglés", "Switch to Spanish")}">${icon("translate")}<span>${opposite().toUpperCase()}</span></button>
+          <button data-action="open-premium" class="stat-chip premium-chip">${icon("crown")}<span>PLUS</span></button>
+          <span class="stat-chip points-chip">${icon("star")}<b>${state.points}</b></span>
+          <span class="stat-chip streak-chip">${icon("flame")}<b>${state.streak}</b></span>
+        </div>
+      </header>`;
+  }
   return `
     <header class="top-bar top-bar-${state.route}">
       <button class="brand-button" data-action="nav" data-route="home" aria-label="DuoBiblia inicio">
@@ -476,6 +510,7 @@ function renderDeepHeader() {
 }
 
 function getPrayerExperience(date = new Date()) {
+  return getAnnualDevotional(date);
   const period = getLocalDayPeriod(date);
   const experiences = {
     morning: {
@@ -547,7 +582,7 @@ function renderHome() {
   const verse = getDailyVerse();
   const verseRecord = featuredVerseRecord(verse, state.uiLang);
   const prayer = getPrayerExperience();
-  const prayerDone = hasCompletedDailyPrayer(state);
+  const prayerDone = hasCompletedPrayer(state, new Date(), prayer.period);
   return `
     <section class="reference-home-hero ${highlightClass(verseRecord.key)}" ${verseHostAttributes(verseRecord)}>
       <div class="hero-backdrop" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -577,7 +612,7 @@ function renderHome() {
       <button class="challenge-card" data-action="nav" data-route="learn">
         <div class="challenge-badge">+20 XP</div>
         ${spotIllustration("quiz", "challenge-icon")}
-        <div><strong>${dualText("¿Qué significa “peace”?", "What does “paz” mean?")}</strong>${dualText("Biblia + inglés · 1 pregunta", "Bible + Spanish · 1 question", "card-secondary")}</div>
+        <div><strong>${dualText("Dos retos nuevos para hoy", "Two new challenges for today")}</strong>${dualText("Idioma + Biblia · 2 preguntas", "Language + Bible · 2 questions", "card-secondary")}</div>
         ${icon("chevron")}
       </button>
     </section>
@@ -608,7 +643,7 @@ function renderBible() {
       <div><span class="eyebrow">${dualText("LEE · ESCUCHA · APRENDE", "READ · LISTEN · LEARN")}</span><h1>${dualText("Biblia", "Bible")}</h1></div>
       <button class="icon-button bordered" data-action="toggle-theme">${icon(state.dark ? "sun" : "moon")}</button>
     </section>
-    <div class="bible-version-picker" role="group" aria-label="${text("Versión de la Biblia", "Bible version")}"><button data-action="switch-bible-version" data-version="kjv" class="${state.bibleVersion === "kjv" ? "active" : ""}"><b>KJV</b><small>English</small></button><button data-action="switch-bible-version" data-version="mi-biblia" class="${state.bibleVersion === "mi-biblia" ? "active" : ""}"><b>${text("MI BIBLIA", "MY BIBLE")}</b><small>Español</small></button></div>
+    <div class="bible-version-picker" role="group" aria-label="${text("Idioma de la Biblia", "Bible language")}"><button data-action="switch-bible-version" data-version="kjv" class="${state.bibleVersion === "kjv" ? "active" : ""}">${dualText("Biblia en inglés", "Bible in English")}</button><button data-action="switch-bible-version" data-version="mi-biblia" class="${state.bibleVersion === "mi-biblia" ? "active" : ""}">${dualText("Biblia en español", "Bible in Spanish")}</button></div>
     <label class="search-box">${icon("search")}<input id="bible-search" type="search" value="${escapeHtml(state.searchQuery || "")}" placeholder="${text(`Buscar en ${version.label}`, `Search ${version.label}`)}" /><kbd>⌘ K</kbd></label>
     ${(state.searchQuery || "") ? `<section class="search-results"><div class="section-title"><h2>${dualText("Resultados", "Results")}</h2><small>${state.fullSearchLoading ? dualText("Buscando…", "Searching…") : results.length}</small></div>${results.length ? results.map(renderSearchResult).join("") : `<div class="empty-state">${state.fullSearchLoading ? dualText("Buscando en 31.102 versículos…", "Searching 31,102 verses…") : dualText("No encontramos resultados.", "No results found.")}</div>`}</section>` : ""}
     <button class="reading-plan-card" data-action="open-reading-plan">
@@ -616,15 +651,15 @@ function renderBible() {
     </button>
     <section class="book-index">
       <div class="index-tabs"><button class="active">${dualText("Libros", "Books")}</button><button>${dualText("Capítulos", "Chapters")}</button><button>${dualText("Guardados", "Saved")}</button></div>
-      <div class="testament-label"><span>${dualText("Antiguo y Nuevo Testamento", "Old & New Testament")}</span><small>${version.label} · ${dualText("completa · 66 libros", "complete · 66 books")}</small></div>
+      <div class="testament-label"><span>${dualText("Antiguo y Nuevo Testamento", "Old & New Testament")}</span><small>${state.bibleVersion === "kjv" ? dualText("Biblia en inglés", "Bible in English") : dualText("Biblia en español", "Bible in Spanish")} · ${dualText("completa · 66 libros", "complete · 66 books")}</small></div>
       ${books.map((book, index) => `<button class="book-row" data-action="open-book" data-book-id="${book.id}"><span class="book-number">${String(index + 1).padStart(2, "0")}</span><div><strong>${dualText(book.es, book.en)}</strong><small>${book.chapters} ${dualText("capítulos", "chapters")}</small></div><span class="book-progress">${getCompletedBookProgress(book.id, state.completedPlanDays)}%</span>${icon("chevron")}</button>`).join("")}
     </section>
-    <aside class="license-notice"><strong>${text("Dos Biblias completas y verificadas", "Two complete, verified Bibles")}</strong><p>${text("King James Version en inglés y el texto español extraído exclusivamente de Mi Biblia traducida.pdf: 66 libros y 31.102 referencias en cada idioma.", "The English King James Version and the Spanish text extracted exclusively from Mi Biblia traducida.pdf: 66 books and 31,102 references in each language.")}</p></aside>`;
+    <details class="license-notice"><summary>${dualText("Información de las versiones", "Version information")}</summary><p>${text("Biblia en inglés: King James Version 1769. Biblia en español: texto extraído exclusivamente de Mi Biblia traducida.pdf. Cada una contiene 66 libros y 31.102 referencias.", "English Bible: King James Version 1769. Spanish Bible: text extracted exclusively from Mi Biblia traducida.pdf. Each contains 66 books and 31,102 references.")}</p></details>`;
 }
 
 function renderSearchResult(verse) {
   if (verse.bookId) {
-    return `<button class="search-result" data-action="open-bible-verse" data-version="${verse.version}" data-book-id="${verse.bookId}" data-chapter="${verse.chapter}" data-verse-number="${verse.verse}"><div><strong>${escapeHtml(verse.reference)} · ${BIBLE_VERSIONS[verse.version]?.label || "KJV"}</strong><p>${escapeHtml(verse.text)}</p></div>${icon("chevron")}</button>`;
+    return `<button class="search-result" data-action="open-bible-verse" data-version="${verse.version}" data-book-id="${verse.bookId}" data-chapter="${verse.chapter}" data-verse-number="${verse.verse}"><div><strong>${escapeHtml(verse.reference)} · ${verse.version === "kjv" ? text("Biblia en inglés", "English Bible") : text("Biblia en español", "Spanish Bible")}</strong><p>${escapeHtml(verse.text)}</p></div>${icon("chevron")}</button>`;
   }
   return `<button class="search-result" data-action="open-reader" data-verse="${verse.id}"><div><strong>${verse.reference[state.uiLang]}</strong><p>${verse[state.uiLang]}</p></div>${icon("chevron")}</button>`;
 }
@@ -641,10 +676,10 @@ function renderKjvChapter() {
   return `
     ${planNavigation ? `<section class="plan-session-card"><div><span class="eyebrow">${dualText(`DÍA ${planDay.day} · PLAN ANUAL`, `DAY ${planDay.day} · YEAR PLAN`)}</span><strong>${escapeHtml(planDay.labels[state.uiLang])}</strong><small>${dualText(`Lectura ${planChapterIndex + 1} de ${planDay.chapters.length}`, `Reading ${planChapterIndex + 1} of ${planDay.chapters.length}`)}</small></div><span class="plan-session-progress">${planChapterIndex + 1}/${planDay.chapters.length}</span></section>` : ""}
     <section class="chapter-heading">
-      <span>${version.id === "kjv" ? "KING JAMES VERSION" : text("MI BIBLIA TRADUCIDA", "MY TRANSLATED BIBLE")}</span>
+      <span>${version.id === "kjv" ? dualText("BIBLIA EN INGLÉS", "ENGLISH BIBLE") : dualText("BIBLIA EN ESPAÑOL", "SPANISH BIBLE")}</span>
       <h1>${book[state.uiLang]} ${chapter}</h1>
       <p>${text("Selecciona una o varias palabras y toca Traducir.", "Select one or more words, then tap Translate.")}</p>
-      <div class="version-toggle chapter-version-toggle"><button data-action="switch-bible-version" data-version="kjv" class="${version.id === "kjv" ? "active" : ""}">KJV</button><button data-action="switch-bible-version" data-version="mi-biblia" class="${version.id === "mi-biblia" ? "active" : ""}">${text("MI BIBLIA", "MY BIBLE")}</button></div>
+      <div class="version-toggle chapter-version-toggle"><button data-action="switch-bible-version" data-version="kjv" class="${version.id === "kjv" ? "active" : ""}">${text("Inglés", "English")}</button><button data-action="switch-bible-version" data-version="mi-biblia" class="${version.id === "mi-biblia" ? "active" : ""}">${text("Español", "Spanish")}</button></div>
     </section>
     <nav class="chapter-switcher">
       ${planNavigation
@@ -663,30 +698,40 @@ function renderKjvChapter() {
     <aside class="kjv-source-note">${version.id === "kjv" ? `KJV 1769 · eBible.org / Crosswire Bible Society · ${text("Dominio público fuera del Reino Unido", "Public domain outside the United Kingdom")}` : `Mi Biblia traducida.pdf · ${text("Texto aportado por el propietario del proyecto", "Text supplied by the project owner")}`}</aside>`;
 }
 
-function renderLearn() {
-  const answered = state.quizAnswer;
-  const correct = state.uiLang === "es" ? "paz" : "peace";
-  const answers = [
-    { es: "Descanso", en: "Rest" }, { es: "Paz", en: "Peace" },
-    { es: "Perdón", en: "Forgiveness" }, { es: "Esperanza", en: "Hope" }
-  ];
+function renderDailyQuiz(quiz, type, position) {
+  const selectedIndex = state.dailyQuizAnswers?.[type];
+  const answered = Number.isInteger(selectedIndex);
+  const correct = selectedIndex === quiz.correctIndex;
+  const label = type === "language" ? dualText("IDIOMA", "LANGUAGE") : dualText("BIBLIA", "BIBLE");
   return `
-    <section class="page-heading learn-heading"><div><span class="eyebrow">${dualText("LECCIÓN DIARIA", "DAILY LESSON")}</span><h1>${dualText("Aprende con la Palabra", "Learn through the Word")}</h1><p>${dualText("Una práctica corta para tu fe y tu inglés.", "A short practice for your faith and Spanish.")}</p></div><div class="lesson-xp">${icon("star")}<b>${state.points}</b> XP</div></section>
-    <div class="lesson-progress"><span style="width:${answered ? "100%" : "25%"}"></span></div>
-    <section class="quiz-card">
-      <div class="quiz-meta"><span>${dualText("PREGUNTA 1 DE 1", "QUESTION 1 OF 1")}</span><span class="difficulty">${dualText("Fácil", "Easy")}</span></div>
+    <section class="quiz-card daily-quiz-${type}">
+      <div class="quiz-meta"><span>${dualText(`PREGUNTA ${position} DE 2`, `QUESTION ${position} OF 2`)} · ${label}</span><span class="difficulty">${dualText("Diaria", "Daily")}</span></div>
       ${spotIllustration("quiz", "quiz-symbol")}
-      <h2>${dualText("En Juan 14:27, ¿qué significa “peace”?", "In John 14:27, what does “paz” mean?")}</h2>
-      <p class="quiz-context">${dualText("“Peace I leave with you. My peace I give to you.”", "“La paz os dejo, mi paz os doy.”")}</p>
-      <div class="answer-grid">${answers.map((answer) => {
-        const primaryAnswer = answer[state.uiLang];
-        const isCorrect = primaryAnswer.toLowerCase() === correct;
-        const selected = primaryAnswer === answered;
-        return `<button class="answer-option ${selected ? (isCorrect ? "correct" : "incorrect") : ""} ${answered && isCorrect ? "reveal-correct" : ""}" data-action="quiz-answer" data-answer="${primaryAnswer}" ${answered ? "disabled" : ""}>${dualObject(answer)}${selected || (answered && isCorrect) ? icon(isCorrect ? "check" : "close") : ""}</button>`;
+      <h2>${dualObject(quiz.prompt)}</h2>
+      <p class="quiz-context">${dualObject(quiz.context)}</p>
+      <div class="answer-grid">${quiz.options.map((answer, index) => {
+        const isCorrect = index === quiz.correctIndex;
+        const selected = index === selectedIndex;
+        const answerCopy = quiz.answerLanguage
+          ? escapeHtml(answer[quiz.answerLanguage])
+          : (answer.es === answer.en ? escapeHtml(answer.es) : dualObject(answer));
+        return `<button class="answer-option ${selected ? (isCorrect ? "correct" : "incorrect") : ""} ${answered && isCorrect ? "reveal-correct" : ""}" data-action="quiz-answer" data-quiz-type="${type}" data-option-index="${index}" ${answered ? "disabled" : ""}>${answerCopy}${selected || (answered && isCorrect) ? icon(isCorrect ? "check" : "close") : ""}</button>`;
       }).join("")}</div>
-      ${answered ? `<div class="answer-feedback ${answered.toLowerCase() === correct ? "success" : "try-again"}"><strong>${answered.toLowerCase() === correct ? dualText("¡Muy bien! +20 XP", "Great job! +20 XP") : dualText("Casi. “Peace” significa paz.", "Almost. “Paz” means peace.")}</strong><p>${dualText("En este pasaje habla de una calma profunda que viene de Jesús.", "In this passage, it describes a deep calm that comes from Jesus.")}</p><button class="primary-button" data-action="next-question">${dualText("Finalizar reto", "Finish challenge")}</button></div>` : ""}
-    </section>
-    <section class="learning-stats"><article><span>12</span>${dualText("palabras aprendidas", "words learned")}</article><article><span>86%</span>${dualText("precisión", "accuracy")}</article><article><span>${state.streak}</span>${dualText("días de racha", "streak days")}</article></section>`;
+      ${answered ? `<div class="answer-feedback ${correct ? "success" : "try-again"}"><strong>${correct ? dualText("¡Muy bien! +20 XP", "Great job! +20 XP") : dualText("Revisa la respuesta correcta", "Review the correct answer")}</strong><p>${dualObject(quiz.explanation)}</p></div>` : ""}
+    </section>`;
+}
+
+function renderLearn() {
+  const quizzes = getDailyQuizSet();
+  const answeredCount = ["language", "bible"].filter((type) => Number.isInteger(state.dailyQuizAnswers?.[type])).length;
+  const stats = state.quizStats || { answered: 0, correct: 0, wordsLearned: 0 };
+  const accuracy = stats.answered ? Math.round(stats.correct / stats.answered * 100) : 0;
+  return `
+    <section class="page-heading learn-heading"><div><span class="eyebrow">${dualText("LECCIÓN DIARIA", "DAILY LESSON")}</span><h1>${dualText("Aprende con la Palabra", "Learn through the Word")}</h1><p>${dualText("Cada día: un reto de idioma y otro de la Biblia.", "Every day: one language challenge and one Bible challenge.")}</p></div><div class="lesson-xp">${icon("star")}<b>${state.points}</b> XP</div></section>
+    <div class="lesson-progress"><span style="width:${answeredCount / 2 * 100}%"></span></div>
+    ${renderDailyQuiz(quizzes.language, "language", 1)}
+    ${renderDailyQuiz(quizzes.bible, "bible", 2)}
+    <section class="learning-stats"><article><span>${stats.wordsLearned || 0}</span>${dualText("palabras aprendidas", "words learned")}</article><article><span>${accuracy}%</span>${dualText("precisión", "accuracy")}</article><article><span>${state.streak}</span>${dualText("días de racha", "streak days")}</article></section>`;
 }
 
 function renderProfile() {
@@ -723,10 +768,10 @@ function renderPrayer() {
   const prayer = getPrayerExperience();
   const verse = getVerse(prayer.verseId);
   const sourceLang = state.bibleVersion === "mi-biblia" ? "es" : "en";
-  const versionLabel = state.bibleVersion === "mi-biblia" ? text("MI BIBLIA", "MY BIBLE") : "KJV";
+  const versionLabel = state.bibleVersion === "mi-biblia" ? text("Biblia en español", "Spanish Bible") : text("Biblia en inglés", "English Bible");
   const track = prayerTracks.find((item) => item.id === state.currentTrackId) || prayerTracks[0];
   const secondaryLang = sourceLang === "es" ? "en" : "es";
-  const done = hasCompletedDailyPrayer(state);
+  const done = hasCompletedPrayer(state, new Date(), prayer.period);
   const verseRecord = featuredVerseRecord(verse, sourceLang);
   return `
     <section class="prayer-hero prayer-${prayer.period}">
@@ -759,8 +804,8 @@ function renderPrayer() {
         ${renderSelectionBar()}
         <p class="devotional-secondary" lang="${opposite()}">${escapeHtml(prayer.prayer[opposite()])}</p>
       </section>
-      <button class="amen-button ${done ? "completed" : ""}" data-action="amen">${done ? icon("check") : ""}${done ? dualText("Completado por hoy", "Completed today") : dualText("Amén", "Amen")}</button>
-      <p class="amen-hint">${done ? dualText("Tu racha está a salvo. Vuelve mañana para continuar.", "Your streak is safe. Come back tomorrow to continue.") : dualText("Completa la oración para cuidar tu racha", "Complete the prayer to protect your streak")}</p>
+      <button class="amen-button ${done ? "completed" : ""}" data-action="amen">${done ? icon("check") : ""}${done ? dualText("Momento completado", "Moment completed") : dualText("Amén", "Amen")}</button>
+      <p class="amen-hint">${done ? dualText("Este momento quedó guardado. La próxima oración se habilitará en su horario.", "This moment is saved. The next prayer will be available in its time period.") : dualText("Completa la oración para cuidar tu racha", "Complete the prayer to protect your streak")}</p>
     </article>`;
 }
 
@@ -777,8 +822,8 @@ function renderReader() {
   const verse = getVerse(state.selectedVerseId);
   const sourceLang = state.bibleVersion === "mi-biblia" ? "es" : "en";
   const targetLang = sourceLang === "en" ? "es" : "en";
-  const sourceVersion = sourceLang === "en" ? "KJV" : text("MI BIBLIA", "MY BIBLE");
-  const targetVersion = targetLang === "en" ? "KJV" : text("MI BIBLIA", "MY BIBLE");
+  const sourceVersion = sourceLang === "en" ? text("Biblia en inglés", "English Bible") : text("Biblia en español", "Spanish Bible");
+  const targetVersion = targetLang === "en" ? text("Biblia en inglés", "English Bible") : text("Biblia en español", "Spanish Bible");
   const isFavorite = state.favorites.includes(verse.id);
   const note = state.notes[verse.id];
   const presentation = getReaderPresentation(verse.id);
@@ -786,7 +831,7 @@ function renderReader() {
   return `
     <div class="reader-shell ${highlightClass(verseRecord.key)}" ${verseHostAttributes(verseRecord)}>
     <section class="reader-toolbar">
-      <div class="version-toggle"><button data-action="switch-bible-version" data-version="kjv" class="${sourceLang === "en" ? "active" : ""}">KJV</button><button data-action="switch-bible-version" data-version="mi-biblia" class="${sourceLang === "es" ? "active" : ""}">${dualText("MI BIBLIA", "MY BIBLE")}</button></div>
+      <div class="version-toggle"><button data-action="switch-bible-version" data-version="kjv" class="${sourceLang === "en" ? "active" : ""}">${text("Inglés", "English")}</button><button data-action="switch-bible-version" data-version="mi-biblia" class="${sourceLang === "es" ? "active" : ""}">${text("Español", "Spanish")}</button></div>
       ${renderVerseTools(verseRecord)}
     </section>
     <article class="reader-page">
@@ -950,6 +995,7 @@ function progressForSync() {
     points: state.points,
     lastPrayerDate: state.lastPrayerDate,
     lastPrayerCompletedAt: state.lastPrayerCompletedAt,
+    prayerCompletions: state.prayerCompletions,
     favorites: state.favorites,
     notes: state.notes,
     highlights: state.highlights,
@@ -961,6 +1007,10 @@ function progressForSync() {
     quizAnswer: state.quizAnswer,
     lastQuizDate: state.lastQuizDate,
     lastQuizAdDate: state.lastQuizAdDate,
+    dailyQuizDate: state.dailyQuizDate,
+    dailyQuizAnswers: state.dailyQuizAnswers,
+    dailyQuizCompleted: state.dailyQuizCompleted,
+    quizStats: state.quizStats,
     uiLang: state.uiLang,
     bibleVersion: state.bibleVersion,
     progressUpdatedAt: state.progressUpdatedAt,
@@ -992,6 +1042,7 @@ async function handleAuthSession(session) {
       points: syncedProgress.points ?? state.points,
       lastPrayerDate: syncedProgress.lastPrayerDate ?? state.lastPrayerDate,
       lastPrayerCompletedAt: syncedProgress.lastPrayerCompletedAt ?? state.lastPrayerCompletedAt,
+      prayerCompletions: syncedProgress.prayerCompletions || state.prayerCompletions,
       favorites: syncedProgress.favorites || state.favorites,
       notes: syncedProgress.notes || state.notes,
       highlights: syncedProgress.highlights || state.highlights,
@@ -1003,6 +1054,10 @@ async function handleAuthSession(session) {
       quizAnswer: syncedProgress.quizAnswer ?? state.quizAnswer,
       lastQuizDate: syncedProgress.lastQuizDate ?? state.lastQuizDate,
       lastQuizAdDate: syncedProgress.lastQuizAdDate ?? state.lastQuizAdDate,
+      dailyQuizDate: syncedProgress.dailyQuizDate ?? state.dailyQuizDate,
+      dailyQuizAnswers: syncedProgress.dailyQuizAnswers || state.dailyQuizAnswers,
+      dailyQuizCompleted: syncedProgress.dailyQuizCompleted || state.dailyQuizCompleted,
+      quizStats: syncedProgress.quizStats || state.quizStats,
       progressUpdatedAt: syncedProgress.progressUpdatedAt || state.progressUpdatedAt,
       progressRevision: syncedProgress.progressRevision ?? state.progressRevision,
       authLoading: false,
@@ -1018,7 +1073,14 @@ async function handleAuthSession(session) {
 
 function navigate(route) {
   if (prayerAudio && route !== "prayer") stopPrayerMusic();
-  setState({ route, modal: null });
+  const dailyPatch = state.dailyQuizDate === dateKey() ? {} : {
+    dailyQuizDate: dateKey(),
+    dailyQuizAnswers: { language: null, bible: null },
+    dailyQuizCompleted: { language: false, bible: false },
+    quizCompleted: false,
+    quizAnswer: null
+  };
+  setState({ ...dailyPatch, route, modal: null });
   window.scrollTo({ top: 0, behavior: "instant" });
 }
 
@@ -1476,9 +1538,10 @@ app.addEventListener("click", async (event) => {
   } else if (action === "next-track") {
     await playPrayerTrack();
   } else if (action === "amen") {
-    const result = completeDailyPrayer(state);
-    if (!result.newlyCompleted) return showToast(text("Tu oración de hoy ya está completa", "Today's prayer is already complete"));
-    setState({ streak: result.streak, points: result.points, lastPrayerDate: result.lastPrayerDate, lastPrayerCompletedAt: result.lastPrayerCompletedAt, modal: null });
+    const prayer = getPrayerExperience();
+    const result = completePrayer(state, new Date(), prayer.period);
+    if (!result.newlyCompleted) return showToast(text("Este momento de oración ya está completo", "This prayer moment is already complete"));
+    setState({ streak: result.streak, points: result.points, lastPrayerDate: result.lastPrayerDate, lastPrayerCompletedAt: result.lastPrayerCompletedAt, prayerCompletions: result.prayerCompletions, modal: null });
     await showAchievementInterstitial({ premium: state.premium });
     setState({ modal: { type: "streak" } }, false);
   } else if (action === "close-streak") {
@@ -1499,17 +1562,34 @@ app.addEventListener("click", async (event) => {
       showToast(error.message);
     }
   } else if (action === "quiz-answer") {
-    const answer = actionTarget.dataset.answer;
-    const correct = state.uiLang === "es" ? "paz" : "peace";
-    const newlyCorrect = answer.toLowerCase() === correct && !state.quizCompleted;
-    const points = newlyCorrect ? state.points + 20 : state.points;
-    setState({ quizAnswer: answer, quizCompleted: true, lastQuizDate: newlyCorrect ? dateKey() : state.lastQuizDate, points });
-  } else if (action === "next-question") {
-    if (state.lastQuizDate === dateKey() && state.lastQuizAdDate !== dateKey()) {
+    const type = actionTarget.dataset.quizType;
+    const selectedIndex = Number(actionTarget.dataset.optionIndex);
+    if (!["language", "bible"].includes(type) || Number.isInteger(state.dailyQuizAnswers?.[type])) return;
+    const quiz = getDailyQuizSet()[type];
+    const correct = selectedIndex === quiz.correctIndex;
+    const answers = { ...(state.dailyQuizAnswers || {}), [type]: selectedIndex };
+    const completed = { ...(state.dailyQuizCompleted || {}), [type]: true };
+    const allDone = Number.isInteger(answers.language) && Number.isInteger(answers.bible);
+    const stats = {
+      answered: Number(state.quizStats?.answered || 0) + 1,
+      correct: Number(state.quizStats?.correct || 0) + (correct ? 1 : 0),
+      wordsLearned: Number(state.quizStats?.wordsLearned || 0) + (correct && type === "language" ? 1 : 0)
+    };
+    setState({
+      dailyQuizDate: dateKey(),
+      dailyQuizAnswers: answers,
+      dailyQuizCompleted: completed,
+      quizStats: stats,
+      quizAnswer: selectedIndex,
+      quizCompleted: allDone,
+      lastQuizDate: allDone ? dateKey() : state.lastQuizDate,
+      points: correct ? state.points + 20 : state.points
+    });
+    if (allDone && state.lastQuizAdDate !== dateKey()) {
       setState({ lastQuizAdDate: dateKey() });
       await showAchievementInterstitial({ premium: state.premium });
+      showToast(text("Dos retos diarios completados", "Two daily challenges completed"));
     }
-    showToast(text("Reto diario completado", "Daily challenge completed"));
   } else if (action === "toggle-theme") {
     setState({ dark: !state.dark });
   } else if (action === "toggle-notifications") {
@@ -1698,7 +1778,9 @@ MobileApp.addListener("appStateChange", ({ isActive }) => {
     suspendActiveMedia();
     return;
   }
-  if (state.route === "prayer") render();
+  if (state.dailyQuizDate !== dateKey()) {
+    setState({ dailyQuizDate: dateKey(), dailyQuizAnswers: { language: null, bible: null }, dailyQuizCompleted: { language: false, bible: false }, quizCompleted: false, quizAnswer: null });
+  } else if (state.route === "prayer" || state.route === "home" || state.route === "learn") render();
 }).catch(() => {});
 
 document.addEventListener("visibilitychange", () => {
@@ -1723,6 +1805,9 @@ checkRequiredUpdate().then((updateRequired) => {
   if (updateRequired) setState({ updateRequired }, false);
 });
 initializeMobileAds({ premium: state.premium });
+// Download both on-device language models in the background. Translation UI
+// remains responsive while the one-time preparation finishes.
+prepareTranslationModels().catch(() => {});
 setTimeout(() => {
   if (prayerOpenedFromNotification) return;
   const moodSeenToday = state.moodDate === dateKey();

@@ -197,26 +197,38 @@ export function previousDateKey(date = new Date()) {
 }
 
 export function completeDailyPrayer(progress, now = new Date()) {
+  return completePrayer(progress, now, getLocalDayPeriod(now));
+}
+
+export function prayerCompletionKey(date = new Date(), period = getLocalDayPeriod(date)) {
+  return `${dateKey(date)}:${period}`;
+}
+
+export function completePrayer(progress, now = new Date(), period = getLocalDayPeriod(now)) {
   const today = dateKey(now);
-  if (hasCompletedDailyPrayer(progress, now)) return { ...progress, newlyCompleted: false };
+  const key = prayerCompletionKey(now, period);
+  const completions = progress.prayerCompletions || {};
+  if (completions[key]) return { ...progress, newlyCompleted: false, prayerKey: key };
+  const alreadyCompletedToday = Object.keys(completions).some((item) => item.startsWith(`${today}:`));
   const continued = progress.lastPrayerDate === previousDateKey(now);
   return {
     ...progress,
-    streak: continued ? progress.streak + 1 : 1,
+    prayerCompletions: { ...completions, [key]: now.toISOString() },
+    streak: alreadyCompletedToday ? progress.streak : (continued ? progress.streak + 1 : 1),
     points: progress.points + 50,
     lastPrayerDate: today,
     lastPrayerCompletedAt: now.toISOString(),
-    newlyCompleted: true
+    newlyCompleted: true,
+    prayerKey: key
   };
 }
 
 export function hasCompletedDailyPrayer(progress, now = new Date()) {
-  const completedAt = progress?.lastPrayerCompletedAt;
-  if (completedAt) {
-    const parsed = new Date(completedAt);
-    if (!Number.isNaN(parsed.getTime())) return dateKey(parsed) === dateKey(now);
-  }
-  return progress?.lastPrayerDate === dateKey(now);
+  return Object.keys(progress?.prayerCompletions || {}).some((key) => key.startsWith(`${dateKey(now)}:`));
+}
+
+export function hasCompletedPrayer(progress, now = new Date(), period = getLocalDayPeriod(now)) {
+  return Boolean(progress?.prayerCompletions?.[prayerCompletionKey(now, period)]);
 }
 
 export function getVerse(id) {
