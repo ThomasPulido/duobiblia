@@ -10,9 +10,10 @@ import {
   getLocalDayPeriod,
   getVerse,
   getWordHelp,
+  migratePrayerCompletions,
   moodOptions,
   progressPercent,
-  previousDateKey,
+  prayerDayKey,
   searchFeatured,
   topics
 } from "./src/core.mjs";
@@ -23,7 +24,7 @@ import { App as MobileApp } from "@capacitor/app";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { BIBLE_VERSIONS, getBibleChapter, searchBible } from "./src/bible-service.mjs";
 import { chooseNextTrack, prayerTracks } from "./src/music.mjs";
-import { prepareTranslationModels, translateWithContext } from "./src/translation-service.mjs";
+import { translateWithContext } from "./src/translation-service.mjs";
 import { authConfigured, claimStreakReward, getAuthCapabilities, getEntitlement, initializeAuth, mergeProgress, sendEmailCode, signInWithGoogle, signOut, syncProgress, verifyEmailCode } from "./src/auth-service.mjs";
 import { externalBillingEnabled, openBoldCheckout } from "./src/billing-service.mjs";
 import { APP_VERSION, checkRequiredUpdate, openRequiredUpdate } from "./src/update-service.mjs";
@@ -32,7 +33,7 @@ import { disablePrayerNotifications, enablePrayerNotifications, initializePrayer
 import { findReadingPlanChapter, getCompletedBookProgress, getReadingPlanDay, getReadingPlanWeek, nextIncompletePlanDay, READING_PLAN_DAYS } from "./src/reading-plan.mjs";
 
 const STORAGE_KEY = "duobiblia-state-v1";
-const DATA_SCHEMA_VERSION = 3;
+const DATA_SCHEMA_VERSION = 4;
 const initialState = {
   dataSchemaVersion: DATA_SCHEMA_VERSION,
   phase: "splash",
@@ -121,7 +122,8 @@ function loadState() {
     restored.dailyQuizAnswers = { language: null, bible: null, ...(restored.dailyQuizAnswers || {}) };
     restored.dailyQuizCompleted = { language: false, bible: false, ...(restored.dailyQuizCompleted || {}) };
     restored.quizStats = { answered: 0, correct: 0, wordsLearned: 0, ...(restored.quizStats || {}) };
-    if ((Number(saved?.dataSchemaVersion) || 0) < DATA_SCHEMA_VERSION) {
+    const savedSchema = Number(saved?.dataSchemaVersion) || 0;
+    if (savedSchema < 3) {
       restored.completedPlanDays = [];
       restored.readChapters = 0;
       restored.readingPlanWeek = 1;
@@ -129,15 +131,25 @@ function loadState() {
       // Version 2 stored only one cloud-synced date. It could falsely block a
       // new morning/night ritual, so it is deliberately not promoted.
       restored.prayerCompletions = {};
-      restored.lastPrayerDate = restored.lastPrayerDate ? previousDateKey(new Date()) : null;
+      restored.lastPrayerDate = null;
       restored.lastPrayerCompletedAt = null;
       restored.dailyQuizDate = dateKey();
       restored.dailyQuizAnswers = { language: null, bible: null };
       restored.dailyQuizCompleted = { language: false, bible: false };
       restored.progressUpdatedAt = new Date().toISOString();
       restored.progressRevision = (Number(restored.progressRevision) || 0) + 1;
-      restored.dataSchemaVersion = DATA_SCHEMA_VERSION;
     }
+    if (savedSchema < 4) {
+      restored.prayerCompletions = migratePrayerCompletions(restored.prayerCompletions);
+      const latestCompletion = Object.values(restored.prayerCompletions)
+        .map((value) => new Date(value))
+        .filter((value) => !Number.isNaN(value.getTime()))
+        .sort((left, right) => right - left)[0];
+      if (latestCompletion) restored.lastPrayerDate = prayerDayKey(latestCompletion);
+      restored.progressUpdatedAt = new Date().toISOString();
+      restored.progressRevision = (Number(restored.progressRevision) || 0) + 1;
+    }
+    restored.dataSchemaVersion = DATA_SCHEMA_VERSION;
     if (!restored.premiumUntil || new Date(restored.premiumUntil) <= new Date()) restored.premium = false;
     if (restored.dailyQuizDate !== dateKey()) {
       restored.dailyQuizDate = dateKey();
@@ -318,9 +330,38 @@ function recordFromElement(element) {
 }
 
 function resolveVerseRecord(key) {
-  const featured = featuredVerses.find((verse) => verse.id === key);
-  if (featured) return featuredVerseRecord(featured, state.verseRecords[key]?.sourceLang || state.uiLang);
-  return state.verseRecords[key] || null;
+  const normalizedKey = String(key || "").replace(/^featured:/, "");
+  const stored = state.verseRecords[key] || state.verseRecords[normalizedKey] || null;
+  const featured = featuredVerses.find((verse) => verse.id === normalizedKey);
+  if (featured) return featuredVerseRecord(featured, stored?.sourceLang || state.uiLang);
+  const match = normalizedKey.match(/^bible:(kjv|mi-biblia):([^:]+):(\d+):(\d+)$/);
+  if (!match) return stored;
+  const [, versionId, bookId, chapter, verse] = match;
+  const version = BIBLE_VERSIONS[versionId];
+  const book = books.find((item) => item.id === bookId);
+  if (!version || !book) return stored;
+  return {
+    key: normalizedKey,
+    text: stored?.text || text("Toca para volver a abrir este versículo.", "Tap to reopen this verse."),
+    reference: stored?.reference || `${book[version.language]} ${chapter}:${verse}`,
+    sourceLang: stored?.sourceLang || version.language,
+    version: versionId,
+    bookId,
+    chapter: Number(chapter),
+    verse: Number(verse),
+    ...stored
+  };
+}
+
+async function ensurePrayerNotificationSchedule() {
+  if (!Capacitor.isNativePlatform() || !state.notificationsEnabled) return false;
+  try {
+    const enabled = await refreshPrayerNotifications(state.uiLang);
+    if (!enabled && state.notificationsEnabled) setState({ notificationsEnabled: false, notificationPromptSeen: true });
+    return enabled;
+  } catch {
+    return false;
+  }
 }
 
 function withStoredRecord(record, patch = {}) {
@@ -658,6 +699,9 @@ function renderBible() {
 }
 
 function renderSearchResult(verse) {
+  if (verse.type === "book") {
+    return `<button class="search-result book-search-result" data-action="open-book" data-book-id="${verse.bookId}"><div><strong>${dualText(verse.book.es, verse.book.en)}</strong><p>${dualText(`${verse.chapterCount} capítulos`, `${verse.chapterCount} chapters`)}</p></div>${icon("chevron")}</button>`;
+  }
   if (verse.bookId) {
     return `<button class="search-result" data-action="open-bible-verse" data-version="${verse.version}" data-book-id="${verse.bookId}" data-chapter="${verse.chapter}" data-verse-number="${verse.verse}"><div><strong>${escapeHtml(verse.reference)} · ${verse.version === "kjv" ? text("Biblia en inglés", "English Bible") : text("Biblia en español", "Spanish Bible")}</strong><p>${escapeHtml(verse.text)}</p></div>${icon("chevron")}</button>`;
   }
@@ -835,7 +879,7 @@ function renderReader() {
       ${renderVerseTools(verseRecord)}
     </section>
     <article class="reader-page">
-      <header><span>${dualText(`${verse.book.es.toUpperCase()} · ${sourceLang === "es" ? sourceVersion : targetVersion}`, `${verse.book.en.toUpperCase()} · ${sourceLang === "en" ? sourceVersion : targetVersion}`)}</span><h1>${dualText(verse.reference.es, verse.reference.en)}</h1><p>${dualText("Selecciona una frase y se traduce al instante", "Select a phrase and it translates instantly")}</p></header>
+      <header><span>${dualText(`${verse.book.es.toUpperCase()} · ${sourceLang === "es" ? sourceVersion : targetVersion}`, `${verse.book.en.toUpperCase()} · ${sourceLang === "en" ? sourceVersion : targetVersion}`)}</span><h1>${dualText(verse.reference.es, verse.reference.en)}</h1><p>${dualText("Selecciona una o varias palabras y después toca Traducir", "Select one or more words, then tap Translate")}</p></header>
       <div class="chapter-rule"><span>${verse.chapter}</span></div>
       <p class="reader-verse" data-source-lang="${sourceLang}" data-verse-context="${escapeHtml(verse[sourceLang])}"><sup>${verse.verse}</sup>${renderInteractiveText(verse[sourceLang])}</p>
       ${renderSelectionBar()}
@@ -926,7 +970,7 @@ function renderModal() {
   }
   if (state.modal.type === "translation") {
     const help = state.modal.help;
-    return `<div class="modal-layer bottom-layer" data-action="close-on-backdrop"><div class="bottom-sheet">${close}<div class="sheet-handle"></div><div class="translation-heading"><div><span class="eyebrow">${text("TRADUCCIÓN EN CONTEXTO", "CONTEXTUAL TRANSLATION")}</span><h2>${escapeHtml(state.modal.word)}</h2></div><button class="sound-button" data-action="speak-word" data-word="${escapeHtml(state.modal.word)}" data-language="${state.modal.sourceLang || "en"}">${icon("volume")}</button></div><div class="translation-main"><strong>${escapeHtml(help.translated ?? help.es)}</strong><span>${escapeHtml(help.pronunciation)} · ${escapeHtml(help.type)}</span></div><p>${escapeHtml(help.meaning)}</p><div class="context-box"><span>${text("EN ESTA FRASE", "IN THIS PHRASE")}</span><strong>${escapeHtml(help.phrase)}</strong><p>${escapeHtml(help.phraseEs)}</p></div><button class="primary-button" data-action="close-modal">${text("Entendido", "Got it")}</button></div></div>`;
+    return `<div class="modal-layer bottom-layer" data-action="close-on-backdrop"><div class="bottom-sheet">${close}<div class="sheet-handle"></div><div class="translation-heading"><div><span class="eyebrow">${text("TRADUCCIÓN EN CONTEXTO", "CONTEXTUAL TRANSLATION")}</span><h2>${escapeHtml(state.modal.word)}</h2></div><button class="sound-button" data-action="speak-word" data-word="${escapeHtml(state.modal.word)}" data-language="${state.modal.sourceLang || "en"}">${icon("volume")}</button></div><div class="translation-main"><strong>${escapeHtml(help.translated ?? help.es)}</strong><span>${escapeHtml(help.pronunciation)} · ${escapeHtml(help.type)}</span></div><p>${escapeHtml(help.meaning)}</p><div class="context-box ${help.parallelText ? "bible-parallel-box" : ""}"><span>${help.parallelText ? dualText("PASAJE BÍBLICO PARALELO", "PARALLEL BIBLE PASSAGE") : text("EN ESTA FRASE", "IN THIS PHRASE")}</span><strong>${escapeHtml(help.parallelReference || help.phrase)}</strong>${help.parallelText ? `<small>${escapeHtml(help.phrase)}</small>` : ""}<p>${escapeHtml(help.phraseEs)}</p></div><button class="primary-button" data-action="close-modal">${text("Entendido", "Got it")}</button></div></div>`;
   }
   if (state.modal.type === "translation-loading") {
     return `<div class="modal-layer bottom-layer"><div class="bottom-sheet translation-loading-sheet">${close}<div class="sheet-handle"></div><span class="translation-loader">${icon("translate")}</span><h2>${dualText("Preparando traducción", "Preparing translation")}</h2><p>${dualText("Buscando el pasaje paralelo y conservando su contexto…", "Finding the parallel passage and preserving its context…")}</p></div></div>`;
@@ -1147,11 +1191,20 @@ async function runFullBibleSearch(query) {
     return;
   }
   const expectedQuery = query;
-  setState({ fullSearchLoading: true }, false);
+  state.fullSearchLoading = true;
   try {
     const expectedVersion = state.bibleVersion;
     const results = await searchBible(expectedVersion, expectedQuery);
-    if (state.searchQuery === expectedQuery) setState({ fullSearchResults: results, fullSearchLoading: false }, false);
+    if (state.searchQuery === expectedQuery) {
+      const wasFocused = document.activeElement?.id === "bible-search";
+      const cursor = document.querySelector("#bible-search")?.selectionStart;
+      setState({ fullSearchResults: results, fullSearchLoading: false }, false);
+      if (wasFocused) requestAnimationFrame(() => {
+        const input = document.querySelector("#bible-search");
+        input?.focus();
+        if (Number.isInteger(cursor)) input?.setSelectionRange(cursor, cursor);
+      });
+    }
   } catch (error) {
     if (state.searchQuery === expectedQuery) {
       setState({ fullSearchResults: [], fullSearchLoading: false }, false);
@@ -1187,7 +1240,43 @@ function updateSelectionUI(host) {
   if (preview) preview.textContent = selected.map((token) => token.dataset.word).join(" ");
 }
 
-async function openContextTranslation(selection, context, sourceLang = "en") {
+async function getParallelVerseRecord(record) {
+  if (!record) return null;
+  if (record.featuredId) {
+    const verse = getVerse(record.featuredId);
+    return featuredVerseRecord(verse, record.sourceLang === "en" ? "es" : "en");
+  }
+  if (!record.bookId || !record.chapter || !record.verse) return null;
+  const targetVersionId = record.sourceLang === "en" ? "mi-biblia" : "kjv";
+  const targetVersion = BIBLE_VERSIONS[targetVersionId];
+  const targetChapter = await getBibleChapter(targetVersionId, record.bookId, record.chapter);
+  const targetText = targetChapter[Number(record.verse)];
+  const book = books.find((item) => item.id === record.bookId);
+  if (!targetText || !book) return null;
+  return {
+    key: `bible:${targetVersionId}:${record.bookId}:${record.chapter}:${record.verse}`,
+    text: targetText,
+    reference: `${book[targetVersion.language]} ${record.chapter}:${record.verse}`,
+    sourceLang: targetVersion.language,
+    version: targetVersionId,
+    bookId: record.bookId,
+    chapter: Number(record.chapter),
+    verse: Number(record.verse)
+  };
+}
+
+function attachParallelPassage(help, parallel, context) {
+  if (!parallel) return help;
+  return {
+    ...help,
+    phrase: context,
+    phraseEs: parallel.text,
+    parallelText: parallel.text,
+    parallelReference: parallel.reference
+  };
+}
+
+async function openContextTranslation(selection, context, sourceLang = "en", record = null) {
   const cleanSelection = selection.trim();
   if (!cleanSelection) return;
   const singleWord = !/\s/.test(cleanSelection);
@@ -1208,13 +1297,33 @@ async function openContextTranslation(selection, context, sourceLang = "en") {
     phraseEs: localHelp.known ? localHelp.phraseEs : text("Traduciendo el contexto…", "Translating context…")
   };
   setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: loadingHelp } }, false);
+  const parallelPromise = getParallelVerseRecord(record).catch(() => null);
+  const sameAsVerse = cleanSelection.replace(/\s+/g, " ").trim() === String(context).replace(/\s+/g, " ").trim();
   try {
+    const parallel = await parallelPromise;
+    if (parallel) {
+      const exactHelp = attachParallelPassage(loadingHelp, parallel, context);
+      if (sameAsVerse) {
+        setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: {
+          ...exactHelp,
+          translated: parallel.text,
+          pronunciation: text("Texto bíblico", "Bible text"),
+          type: text("traducción integrada", "integrated translation"),
+          meaning: text("Este texto proviene exactamente de la Biblia paralela integrada, no de una traducción literal automática.", "This text comes directly from the integrated parallel Bible, not from an automatic literal translation.")
+        } } }, false);
+        return;
+      }
+      setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: exactHelp } }, false);
+    }
+    // Known English words use the curated biblical meaning immediately. The
+    // offline model remains available for unknown words and selected phrases.
+    if (localHelp.known) return;
     const nativeHelp = await translateWithContext(cleanSelection, context, sourceLang);
     if (nativeHelp) {
-      setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: nativeHelp } }, false);
+      setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: attachParallelPassage(nativeHelp, parallel, context) } }, false);
     } else if (!localHelp.known) {
       setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: {
-        ...loadingHelp,
+        ...attachParallelPassage(loadingHelp, parallel, context),
         translated: text("Disponible en la app móvil", "Available in the mobile app"),
         meaning: text("La traducción completa usa el modelo sin conexión de Android/iOS.", "Complete translation uses the Android/iOS offline model."),
         phraseEs: text("Instala el APK para traducir esta selección completa.", "Install the APK to translate this full selection.")
@@ -1222,7 +1331,7 @@ async function openContextTranslation(selection, context, sourceLang = "en") {
     }
   } catch {
     setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: {
-      ...loadingHelp,
+      ...attachParallelPassage(loadingHelp, await parallelPromise, context),
       translated: localHelp.known ? localHelp.es : text("Modelo pendiente", "Model pending"),
       meaning: text("Conéctate una vez para descargar el modelo inglés–español; después funcionará sin conexión.", "Connect once to download the English–Spanish model; afterward it works offline."),
       phraseEs: text("El modelo todavía no pudo completar la selección.", "The model could not complete the selection yet.")
@@ -1234,26 +1343,8 @@ async function openFullVerseTranslation(record) {
   if (!record) return;
   setState({ modal: { type: "translation-loading" } }, false);
   try {
-    if (record.featuredId) {
-      const verse = getVerse(record.featuredId);
-      const source = featuredVerseRecord(verse, record.sourceLang);
-      const target = featuredVerseRecord(verse, record.sourceLang === "en" ? "es" : "en");
-      setState({ modal: { type: "verse-translation", source, target } }, false);
-      return;
-    }
-    const targetVersionId = record.sourceLang === "en" ? "mi-biblia" : "kjv";
-    const targetVersion = BIBLE_VERSIONS[targetVersionId];
-    const targetChapter = await getBibleChapter(targetVersionId, record.bookId, record.chapter);
-    const targetText = targetChapter[record.verse];
-    const book = books.find((item) => item.id === record.bookId) || books[0];
-    const target = {
-      ...record,
-      key: `bible:${targetVersionId}:${record.bookId}:${record.chapter}:${record.verse}`,
-      text: targetText,
-      reference: `${book[targetVersion.language]} ${record.chapter}:${record.verse}`,
-      sourceLang: targetVersion.language,
-      version: targetVersionId
-    };
+    const target = await getParallelVerseRecord(record);
+    if (!target) throw new Error("Parallel verse unavailable");
     setState({ modal: { type: "verse-translation", source: record, target } }, false);
   } catch {
     setState({ modal: null }, false);
@@ -1439,6 +1530,7 @@ app.addEventListener("click", async (event) => {
     setState({ modal: null }, false);
     if (record?.featuredId) openReader(record.featuredId);
     else if (record) await openBibleChapter(record.bookId, record.chapter, record.verse, record.version);
+    else showToast(text("No pudimos volver a abrir este versículo", "We couldn't reopen this verse"));
   } else if (action === "open-prayer") {
     navigate("prayer");
     if (state.musicEnabled) await startPrayerMusic();
@@ -1480,13 +1572,13 @@ app.addEventListener("click", async (event) => {
     const selection = [...host.querySelectorAll(".word-token.selected")]
       .map((token) => token.dataset.word)
       .join(" ");
-    await openContextTranslation(selection, host.dataset.verseContext || host.dataset.verseText || selection, host.dataset.sourceLang || "en");
+    await openContextTranslation(selection, host.dataset.verseContext || host.dataset.verseText || selection, host.dataset.sourceLang || "en", recordFromElement(host));
   } else if (action === "clear-selection") {
     clearSelectionUI();
   } else if (action === "translate-word") {
     const word = actionTarget.dataset.word;
     const host = actionTarget.closest("[data-verse-key], [data-verse-context]");
-    await openContextTranslation(word, host?.dataset.verseContext || word, host?.dataset.sourceLang || "en");
+    await openContextTranslation(word, host?.dataset.verseContext || word, host?.dataset.sourceLang || "en", recordFromElement(host));
   } else if (action === "translate-phrase") {
     const word = actionTarget.dataset.phrase;
     const sourceLang = actionTarget.closest("[data-source-lang]")?.dataset.sourceLang || (state.bibleVersion === "mi-biblia" ? "es" : "en");
@@ -1622,7 +1714,7 @@ app.addEventListener("click", async (event) => {
   } else if (action === "switch-language") {
     const uiLang = opposite();
     setState({ uiLang, bibleVersion: uiLang === "es" ? "mi-biblia" : "kjv", fullSearchResults: null });
-    if (state.notificationsEnabled) refreshPrayerNotifications(uiLang).catch(() => {});
+    if (state.notificationsEnabled) enablePrayerNotifications(uiLang).catch(() => {});
   } else if (action === "open-account") {
     setState({ modal: { type: "account" }, pendingPremium: false, pendingStreakReward: false, authError: null }, false);
   } else if (action === "send-email-code") {
@@ -1754,13 +1846,14 @@ app.addEventListener("input", (event) => {
   state.searchQuery = value;
   state.fullSearchResults = null;
   persist();
-  const cursor = event.target.selectionStart;
-  render();
-  const nextInput = document.querySelector("#bible-search");
-  nextInput?.focus();
-  nextInput?.setSelectionRange(cursor, cursor);
   clearTimeout(bibleSearchTimer);
-  bibleSearchTimer = setTimeout(() => runFullBibleSearch(value), 280);
+  if (!value.trim()) {
+    state.fullSearchLoading = false;
+    render();
+    requestAnimationFrame(() => document.querySelector("#bible-search")?.focus());
+    return;
+  }
+  bibleSearchTimer = setTimeout(() => runFullBibleSearch(value), 220);
 });
 
 window.addEventListener("keydown", (event) => {
@@ -1781,6 +1874,7 @@ MobileApp.addListener("appStateChange", ({ isActive }) => {
   if (state.dailyQuizDate !== dateKey()) {
     setState({ dailyQuizDate: dateKey(), dailyQuizAnswers: { language: null, bible: null }, dailyQuizCompleted: { language: false, bible: false }, quizCompleted: false, quizAnswer: null });
   } else if (state.route === "prayer" || state.route === "home" || state.route === "learn") render();
+  ensurePrayerNotificationSchedule();
 }).catch(() => {});
 
 document.addEventListener("visibilitychange", () => {
@@ -1795,6 +1889,7 @@ initializePrayerNotifications(async () => {
   setState({ phase: "app", route: "prayer", modal: null }, false);
   if (state.musicEnabled) await startPrayerMusic();
 }).catch(() => {});
+ensurePrayerNotificationSchedule();
 initializeAuth(handleAuthSession).catch((error) => {
   setState({ authLoading: false, authError: error.message }, false);
 });
@@ -1805,9 +1900,6 @@ checkRequiredUpdate().then((updateRequired) => {
   if (updateRequired) setState({ updateRequired }, false);
 });
 initializeMobileAds({ premium: state.premium });
-// Download both on-device language models in the background. Translation UI
-// remains responsive while the one-time preparation finishes.
-prepareTranslationModels().catch(() => {});
 setTimeout(() => {
   if (prayerOpenedFromNotification) return;
   const moodSeenToday = state.moodDate === dateKey();

@@ -2,7 +2,8 @@ import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
 
 const PRAYER_NOTIFICATION_IDS = [7101, 7102, 7103];
-const CHANNEL_ID = "daily-prayer";
+const CHANNEL_ID = "daily-prayer-guitar-v2";
+const SOUND_FILE = "duobiblia_guitar_calm.wav";
 let listenerInstalled = false;
 
 const notificationCopy = {
@@ -62,6 +63,14 @@ function nativeOnly() {
   return Capacitor.isNativePlatform();
 }
 
+function hasCurrentSchedule(notifications = []) {
+  return PRAYER_NOTIFICATION_IDS.every((id) => notifications.some((notification) =>
+    notification.id === id
+      && (Capacitor.getPlatform() !== "android" || notification.channelId === CHANNEL_ID)
+      && (Capacitor.getPlatform() === "android" || notification.sound === SOUND_FILE)
+  ));
+}
+
 export async function initializePrayerNotifications(onPrayerOpened) {
   if (!nativeOnly() || listenerInstalled) return;
   listenerInstalled = true;
@@ -94,7 +103,8 @@ export async function enablePrayerNotifications(language = "es") {
         : "Morning, afternoon, and night prayer reminders",
       importance: 4,
       visibility: 1,
-      vibration: true
+      vibration: true,
+      sound: SOUND_FILE
     });
   }
 
@@ -108,6 +118,7 @@ export async function enablePrayerNotifications(language = "es") {
       title: item.title,
       body: item.body,
       channelId: CHANNEL_ID,
+      sound: SOUND_FILE,
       schedule: {
         on: { hour: item.hour, minute: item.minute },
         repeats: true,
@@ -116,7 +127,9 @@ export async function enablePrayerNotifications(language = "es") {
       extra: { route: "prayer", period: item.id === 7101 ? "morning" : item.id === 7102 ? "afternoon" : "night" }
     }))
   });
-  return { enabled: true };
+  const pending = await LocalNotifications.getPending();
+  const scheduled = hasCurrentSchedule(pending.notifications);
+  return { enabled: scheduled, reason: scheduled ? null : "not-scheduled" };
 }
 
 export async function disablePrayerNotifications() {
@@ -129,5 +142,7 @@ export async function disablePrayerNotifications() {
 
 export async function refreshPrayerNotifications(language = "es") {
   if (await prayerNotificationPermission() !== "granted") return false;
+  const pending = await LocalNotifications.getPending();
+  if (hasCurrentSchedule(pending.notifications)) return true;
   return (await enablePrayerNotifications(language)).enabled;
 }

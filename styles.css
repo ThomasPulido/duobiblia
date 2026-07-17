@@ -1236,3 +1236,96 @@ body.dark .ritual-night { color: #c6d8f5; background: #293747; }
   .plan-day em { display: none; }
   .plan-session-card { padding: 13px; }
 }
+
+/* 1.7 — lock every route to the physical viewport and refine the daily hero. */
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+}
+
+#app,
+.app-shell,
+.screen-content,
+.route-home,
+.reference-home-body,
+.reader-shell,
+.devotional-content {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+#app,
+.app-shell,
+.screen-content { overflow-x: clip; }
+.app-shell > *,
+.screen-content > *,
+.page-heading > *,
+.section-title > *,
+.search-result > *,
+.book-row > * { min-width: 0; max-width: 100%; }
+img, svg, canvas { max-width: 100%; }
+.topic-row,
+.topic-selector { width: 100%; max-width: 100%; overscroll-behavior-inline: contain; }
+.book-index { width: auto; max-width: none; }
+
+.reference-home-hero {
+  min-height: 346px;
+  padding: max(70px, calc(env(safe-area-inset-top) + 60px)) 20px 24px;
+}
+.hero-streak { gap: 6px; }
+.hero-streak .icon { width: 26px; height: 26px; }
+.hero-streak strong { font-size: 35px; }
+.hero-streak-copy { font-size: 15px; }
+.hero-kicker { margin-top: 10px; }
+.hero-verse-button blockquote {
+  display: -webkit-box;
+  max-width: 410px;
+  max-height: 5.08em;
+  margin: 10px auto 9px;
+  overflow: hidden;
+  font-size: clamp(21px, 6.2vw, 28px);
+  line-height: 1.27;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+.hero-reference-button { font-size: 15px; }
+.reference-home-hero > .verse-action-row { margin-top: 9px; }
+.reference-home-hero > .verse-action-row > button { width: 38px; height: 38px; }
+
+.hero-backdrop span {
+  inset: -8%;
+  animation: hero-art-cycle 27s cubic-bezier(.42, 0, .22, 1) infinite both;
+  will-change: transform, opacity;
+}
+.hero-backdrop span:nth-child(1) { transform-origin: 35% 42%; animation-delay: 0s; }
+.hero-backdrop span:nth-child(2) { transform-origin: 72% 38%; animation-delay: -18s; }
+.hero-backdrop span:nth-child(3) { transform-origin: 58% 68%; animation-delay: -9s; }
+@keyframes hero-art-cycle {
+  0% { opacity: 0; transform: scale(1.03) translate3d(-1.2%, .6%, 0); }
+  7%, 28% { opacity: 1; }
+  34% { opacity: 0; transform: scale(1.19) translate3d(1.8%, -1.2%, 0); }
+  100% { opacity: 0; transform: scale(1.19) translate3d(1.8%, -1.2%, 0); }
+}
+
+.bible-parallel-box { border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--line)); background: color-mix(in srgb, var(--gold-soft) 46%, var(--surface)); }
+.bible-parallel-box > span { display: block; }
+.bible-parallel-box > strong { display: block; margin-top: 8px; color: var(--ink); font-family: var(--serif); font-size: 16px; }
+.bible-parallel-box > small { display: block; margin-top: 8px; overflow: hidden; color: var(--ink-soft); font-size: 9px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.bible-parallel-box > p { margin-top: 10px; }
+.book-search-result .dual-copy { align-items: flex-start; }
+
+@media (max-width: 365px) {
+  .book-index { margin-right: -14px; margin-left: -14px; }
+  .reference-home-hero { min-height: 338px; padding-top: max(66px, calc(env(safe-area-inset-top) + 58px)); padding-right: 16px; padding-left: 16px; }
+  .hero-streak strong { font-size: 32px; }
+  .hero-verse-button blockquote { font-size: clamp(20px, 6.5vw, 24px); -webkit-line-clamp: 4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-backdrop span { opacity: 0; animation: none !important; transform: scale(1.08); }
+  .hero-backdrop span:nth-child(1) { opacity: 1; }
+}

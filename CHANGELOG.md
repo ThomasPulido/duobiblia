@@ -1,5 +1,15 @@
 # Historial de versiones
 
+## 1.7.0 — Lectura fluida, traducción bíblica y recordatorios confiables
+
+- La oración nocturna usa un límite devocional a las 5:00: completarla después de medianoche ya no bloquea la noche siguiente.
+- Migración de las finalizaciones anteriores y protección frente a copias antiguas de Google que puedan reactivar un estado incorrecto.
+- Las traducciones muestran el pasaje paralelo exacto de las dos Biblias integradas y conservan el significado bíblico de las palabras conocidas.
+- Búsqueda sin redibujar la pantalla en cada tecla, coincidencia directa de libros y búsqueda sin depender de tildes.
+- Favoritos y notas antiguos vuelven a abrir el libro, capítulo y versículo aunque falte su copia de texto local.
+- Encabezado diario más compacto, movimiento Ken Burns visible en las imágenes y contenido fijado al ancho real del dispositivo.
+- Recordatorios verificados al iniciar y reanudar, restaurados si faltan y acompañados por un sonido breve de guitarra tranquila.
+
 ## 1.6.0 — Oraciones y retos realmente diarios
 
 - Estado de oración separado por fecha local y momento del día; una marca antigua de Google ya no puede bloquear el ritual actual.
