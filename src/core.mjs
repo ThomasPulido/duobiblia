@@ -196,21 +196,47 @@ export function previousDateKey(date = new Date()) {
   return dateKey(copy);
 }
 
+// The night prayer remains part of the day that began the previous morning.
+// This prevents a prayer completed after midnight from blocking the following
+// evening. Five o'clock is also the boundary used by getLocalDayPeriod().
+export function prayerDayKey(date = new Date()) {
+  const copy = new Date(date);
+  copy.setHours(copy.getHours() - 5);
+  return dateKey(copy);
+}
+
+export function previousPrayerDayKey(date = new Date()) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() - 1);
+  return prayerDayKey(copy);
+}
+
+export function migratePrayerCompletions(completions = {}) {
+  const migrated = {};
+  for (const [legacyKey, completedAt] of Object.entries(completions || {})) {
+    const period = String(legacyKey).split(":").at(-1);
+    const timestamp = new Date(completedAt);
+    if (!["morning", "afternoon", "night"].includes(period) || Number.isNaN(timestamp.getTime())) continue;
+    migrated[`${prayerDayKey(timestamp)}:${period}`] = timestamp.toISOString();
+  }
+  return migrated;
+}
+
 export function completeDailyPrayer(progress, now = new Date()) {
   return completePrayer(progress, now, getLocalDayPeriod(now));
 }
 
 export function prayerCompletionKey(date = new Date(), period = getLocalDayPeriod(date)) {
-  return `${dateKey(date)}:${period}`;
+  return `${prayerDayKey(date)}:${period}`;
 }
 
 export function completePrayer(progress, now = new Date(), period = getLocalDayPeriod(now)) {
-  const today = dateKey(now);
+  const today = prayerDayKey(now);
   const key = prayerCompletionKey(now, period);
   const completions = progress.prayerCompletions || {};
   if (completions[key]) return { ...progress, newlyCompleted: false, prayerKey: key };
   const alreadyCompletedToday = Object.keys(completions).some((item) => item.startsWith(`${today}:`));
-  const continued = progress.lastPrayerDate === previousDateKey(now);
+  const continued = progress.lastPrayerDate === previousPrayerDayKey(now);
   return {
     ...progress,
     prayerCompletions: { ...completions, [key]: now.toISOString() },
@@ -224,7 +250,7 @@ export function completePrayer(progress, now = new Date(), period = getLocalDayP
 }
 
 export function hasCompletedDailyPrayer(progress, now = new Date()) {
-  return Object.keys(progress?.prayerCompletions || {}).some((key) => key.startsWith(`${dateKey(now)}:`));
+  return Object.keys(progress?.prayerCompletions || {}).some((key) => key.startsWith(`${prayerDayKey(now)}:`));
 }
 
 export function hasCompletedPrayer(progress, now = new Date(), period = getLocalDayPeriod(now)) {

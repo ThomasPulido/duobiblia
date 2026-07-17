@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { books, completeDailyPrayer, completePrayer, dateKey, featuredVerses, getDailyVerse, getLocalDayPeriod, getMoodVerse, getWordHelp, hasCompletedDailyPrayer, hasCompletedPrayer, normalizeWord, progressPercent, searchFeatured, wordDictionary } from "../src/core.mjs";
+import { books, completeDailyPrayer, completePrayer, dateKey, featuredVerses, getDailyVerse, getLocalDayPeriod, getMoodVerse, getWordHelp, hasCompletedDailyPrayer, hasCompletedPrayer, migratePrayerCompletions, normalizeWord, prayerDayKey, progressPercent, searchFeatured, wordDictionary } from "../src/core.mjs";
 import { ANNUAL_DEVOTIONALS, getAnnualDevotional } from "../src/daily-content.mjs";
 import { ANNUAL_BIBLE_QUIZZES, ANNUAL_LANGUAGE_QUIZZES, ANNUAL_QUIZ_SETS, getDailyQuizSet } from "../src/annual-quizzes.mjs";
 import { chooseNextTrack, prayerTracks } from "../src/music.mjs";
@@ -11,6 +11,7 @@ import { APP_VERSION } from "../src/update-service.mjs";
 import { BOLD_CHECKOUT_URL } from "../src/billing-service.mjs";
 import { ADMOB_IDS } from "../src/config.mjs";
 import { prayerNotificationSchedule } from "../src/notification-service.mjs";
+import { searchBible } from "../src/bible-service.mjs";
 import { getCompletedBookProgress, getReadingPlanDay, getReadingPlanWeek, READING_PLAN_DAYS, YEAR_READING_PLAN } from "../src/reading-plan.mjs";
 
 test("completar la oración inicia una racha y entrega puntos", () => {
@@ -59,6 +60,24 @@ test("Amén vuelve a habilitarse después de medianoche local", () => {
   assert.equal(today.lastPrayerDate, "2026-07-15");
 });
 
+test("una oración hecha después de medianoche pertenece a la noche anterior", () => {
+  const afterMidnight = new Date(2026, 6, 16, 0, 30);
+  const followingNight = new Date(2026, 6, 16, 21, 30);
+  const completed = completePrayer({ streak: 9, points: 500, lastPrayerDate: "2026-07-14", prayerCompletions: {} }, afterMidnight, "night");
+  assert.equal(prayerDayKey(afterMidnight), "2026-07-15");
+  assert.equal(completed.lastPrayerDate, "2026-07-15");
+  assert.equal(hasCompletedPrayer(completed, followingNight, "night"), false);
+  const next = completePrayer(completed, followingNight, "night");
+  assert.equal(next.newlyCompleted, true);
+  assert.equal(next.streak, 11);
+});
+
+test("la migración corrige una noche antigua guardada después de medianoche", () => {
+  const completedAt = new Date(2026, 6, 16, 0, 30).toISOString();
+  const migrated = migratePrayerCompletions({ "2026-07-16:night": completedAt });
+  assert.deepEqual(migrated, { "2026-07-15:night": completedAt });
+});
+
 test("las ayudas de palabras ignoran puntuación", () => {
   assert.equal(getWordHelp("Peace,").es, "paz");
 });
@@ -85,6 +104,22 @@ test("el progreso a Premium queda limitado a cien", () => {
 test("la búsqueda encuentra referencias y temas", () => {
   assert.equal(searchFeatured("Filipenses", "es")[0].id, "philippians-4-6");
   assert.ok(searchFeatured("paz", "es").length >= 1);
+});
+
+test("la búsqueda completa encuentra libros sin tildes y los abre como libros", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (path) => {
+    const file = String(path).includes("mi-biblia") ? "mi-biblia.json" : "kjv.json";
+    const payload = JSON.parse(await readFile(new URL(`../static/data/${file}`, import.meta.url), "utf8"));
+    return { ok: true, json: async () => payload };
+  };
+  try {
+    const [result] = await searchBible("mi-biblia", "genesis");
+    assert.equal(result.type, "book");
+    assert.equal(result.bookId, "GEN");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("dateKey usa fecha local estable", () => {
@@ -220,23 +255,23 @@ test("el cambio local más reciente de color no es sobrescrito por una copia ant
 });
 
 test("la nube antigua no puede reponer la oración falsa del día actual", () => {
-  const cloudV2 = {
-    dataSchemaVersion: 2,
+  const cloudV3 = {
+    dataSchemaVersion: 3,
     streak: 9,
     lastPrayerDate: "2026-07-15",
     lastPrayerCompletedAt: "2026-07-15T01:00:00.000Z",
     progressUpdatedAt: "2026-07-15T10:05:00.000Z"
   };
   const migratedLocal = {
-    dataSchemaVersion: 3,
+    dataSchemaVersion: 4,
     streak: 9,
     lastPrayerDate: "2026-07-14",
     lastPrayerCompletedAt: null,
     prayerCompletions: {},
     progressUpdatedAt: "2026-07-15T10:00:00.000Z"
   };
-  const merged = mergeProgress(cloudV2, migratedLocal);
-  assert.equal(merged.dataSchemaVersion, 3);
+  const merged = mergeProgress(cloudV3, migratedLocal);
+  assert.equal(merged.dataSchemaVersion, 4);
   assert.equal(merged.lastPrayerDate, "2026-07-14");
   assert.deepEqual(merged.prayerCompletions, {});
   const completed = completePrayer(merged, new Date(2026, 6, 15, 22), "night");
@@ -263,8 +298,8 @@ test("la versión mínima permite bloquear instalaciones antiguas", () => {
   assert.equal(compareVersions("2.0.0", "1.9.9"), 1);
 });
 
-test("la versión 1.6.0 usa el nuevo enlace de Bold y los anuncios iOS entregados", () => {
-  assert.equal(APP_VERSION, "1.6.0");
+test("la versión 1.7.0 usa el nuevo enlace de Bold y los anuncios iOS entregados", () => {
+  assert.equal(APP_VERSION, "1.7.0");
   assert.equal(BOLD_CHECKOUT_URL, "https://checkout.bold.co/payment/LNK_84NNU7YDX9");
   assert.equal(ADMOB_IDS.iosAppId, "ca-app-pub-8007313797348394~9653183215");
   assert.equal(ADMOB_IDS.appOpen.iosProduction, "ca-app-pub-8007313797348394/7027019877");
@@ -287,4 +322,14 @@ test("los recordatorios diarios usan la hora local de mañana, tarde y noche", (
   const schedule = prayerNotificationSchedule("es");
   assert.deepEqual(schedule.map(({ hour, minute }) => [hour, minute]), [[7, 0], [15, 0], [21, 30]]);
   assert.equal(prayerNotificationSchedule("en")[2].title, "End the day in peace");
+});
+
+test("Android e iOS incluyen el sonido breve de guitarra para recordatorios", async () => {
+  const androidSound = await readFile(new URL("../android/app/src/main/res/raw/duobiblia_guitar_calm.wav", import.meta.url));
+  const iosSound = await readFile(new URL("../ios/App/App/duobiblia_guitar_calm.wav", import.meta.url));
+  const serviceSource = await readFile(new URL("../src/notification-service.mjs", import.meta.url), "utf8");
+  assert.ok(androidSound.length > 100000);
+  assert.deepEqual(androidSound, iosSound);
+  assert.match(serviceSource, /daily-prayer-guitar-v2/);
+  assert.match(serviceSource, /LocalNotifications\.getPending/);
 });
