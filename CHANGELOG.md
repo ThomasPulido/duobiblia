@@ -1,5 +1,16 @@
 # Historial de versiones
 
+## 1.9.0 — Matutina anual y traducción exacta por fragmentos
+
+- Nueva sección “Valientes por dentro” con 365 matutinas: versículo, lectura, reflexión, reto y oración navegables por fecha.
+- Las 92 fechas sin oración en el documento original se muestran de forma transparente como “oración sugerida”.
+- Selecciones de tres o más palabras devuelven solo el fragmento equivalente copiado de la Biblia integrada en el idioma contrario; una o dos palabras mantienen su significado literal.
+- La matutina permite seleccionar palabras en todas sus secciones, abrir el versículo en la Biblia, guardar, resaltar, anotar y compartir.
+- El contenido anual se carga bajo demanda para no hacer más lento el inicio de la aplicación.
+- Consentimiento de anuncios UMP y acceso a las opciones de privacidad de AdMob.
+- Eliminación permanente de cuenta, perfil, progreso sincronizado y datos locales, preparada mediante una función segura de Supabase.
+- Compilación separada para Google Play sin enlaces de pago externo; el APK directo conserva Bold.
+
 ## 1.8.0 — Traducción bíblica exacta y autoguardado instantáneo
 
 - Las selecciones de tres o más palabras muestran el pasaje exacto de la Biblia integrada en el idioma contrario, sin sustituirlo por una traducción automática.

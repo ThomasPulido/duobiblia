@@ -1,6 +1,6 @@
 {
   "name": "duobiblia",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
   "description": "Aplicación móvil bilingüe para leer la Biblia y aprender idiomas.",
@@ -11,6 +11,7 @@
     "test": "node --test tests/core.test.mjs",
     "check": "node --check app.js",
     "import:kjv": "node scripts/import-kjv.mjs",
+    "import:devotional": "node scripts/import-devotional.mjs",
     "native:sync": "vite build && capacitor sync",
     "native:sync:android": "vite build && capacitor sync android",
     "android": "capacitor open android",

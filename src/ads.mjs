@@ -19,10 +19,25 @@ export async function initializeMobileAds({ premium = false } = {}) {
       initializeForTesting: !USE_PRODUCTION_ADS,
       maxAdContentRating: MaxAdContentRating.General
     });
+    let consentInfo = await AdMob.requestConsentInfo();
+    if (!consentInfo.canRequestAds && consentInfo.isConsentFormAvailable) {
+      consentInfo = await AdMob.showConsentForm();
+    }
+    if (!consentInfo.canRequestAds) return false;
     initialized = true;
     return true;
   } catch (error) {
     console.warn("AdMob no pudo inicializarse; la aplicación continuará sin anuncio.", error);
+    return false;
+  }
+}
+
+export async function showAdPrivacyOptions() {
+  if (!Capacitor.isNativePlatform()) return false;
+  try {
+    await AdMob.showPrivacyOptionsForm();
+    return true;
+  } catch {
     return false;
   }
 }

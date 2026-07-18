@@ -1360,3 +1360,94 @@ img, svg, canvas { max-width: 100%; }
   font-size: 9px;
   font-weight: 800;
 }
+
+/* Matutina anual */
+.matutina-preview { overflow: hidden; }
+.matutina-card {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  width: 100%;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--gold) 34%, var(--line));
+  border-radius: 24px;
+  color: var(--ink);
+  text-align: left;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--paper) 92%, var(--gold)), var(--paper));
+  box-shadow: var(--shadow-sm);
+}
+.matutina-monogram {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 76px;
+  border: 2px solid color-mix(in srgb, var(--gold) 68%, transparent);
+  border-radius: 10px 18px 18px 10px;
+  color: #fff8e8;
+  font: 700 34px/1 Georgia, serif;
+  background: linear-gradient(145deg, #7e3924, #b35e31 58%, #6e2d21);
+  box-shadow: inset 5px 0 0 rgba(0,0,0,.12), 0 8px 18px rgba(87,43,25,.18);
+}
+.matutina-card > div { min-width: 0; }
+.matutina-card div > small { color: var(--gold); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.matutina-card div > strong { display: block; margin-top: 5px; font: 700 20px/1.16 Georgia, serif; overflow-wrap: anywhere; }
+.matutina-card div > p { display: -webkit-box; overflow: hidden; margin: 7px 0 0; color: var(--ink-soft); font: 15px/1.4 Georgia, serif; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.matutina-progress { display: grid; place-items: center; align-content: center; width: 52px; height: 52px; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); }
+.matutina-progress b { font-size: 16px; }.matutina-progress small { color: var(--ink-soft); font-size: 10px; }
+
+.route-devotional { padding: 0; background: var(--canvas); }
+.youth-devotional { width: 100%; max-width: 520px; margin: 0 auto; padding-bottom: 42px; overflow-x: clip; }
+.matutina-hero { position: relative; padding: 42px 24px 34px; color: #fffaf0; text-align: center; background: radial-gradient(circle at 80% 10%, rgba(236,187,103,.3), transparent 30%), linear-gradient(150deg, #4b211d, #7c3b28 58%, #a25c34); }
+.matutina-hero::after { position: absolute; right: 20px; bottom: 14px; left: 20px; height: 1px; content: ""; background: linear-gradient(90deg, transparent, rgba(255,235,190,.55), transparent); }
+.matutina-hero-mark { display: grid; place-items: center; width: 76px; height: 86px; margin: 0 auto 18px; border: 1px solid rgba(255,225,164,.7); border-radius: 12px 22px 22px 12px; background: rgba(31,15,12,.32); box-shadow: inset 7px 0 rgba(0,0,0,.14); }
+.matutina-hero-mark span { font: 700 40px/1 Georgia, serif; }.matutina-hero-mark small { color: #f5cc83; font-size: 11px; }
+.matutina-hero .eyebrow { color: #f5cc83; }.matutina-hero h1 { max-width: 440px; margin: 9px auto 0; font: 700 clamp(30px, 8vw, 43px)/1.05 Georgia, serif; overflow-wrap: anywhere; }
+.matutina-date { margin: 12px auto 0; color: rgba(255,250,240,.82); font-size: 13px; }
+.matutina-year-progress { overflow: hidden; width: min(300px, 84%); height: 4px; margin: 22px auto 0; border-radius: 10px; background: rgba(255,255,255,.17); }
+.matutina-year-progress span { display: block; height: 100%; border-radius: inherit; background: #f5cc83; }
+.matutina-day-nav { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 10px; align-items: end; margin: 16px 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); box-shadow: var(--shadow-sm); }
+.matutina-day-nav label { min-width: 0; }.matutina-day-nav label > span { display: block; margin-bottom: 5px; color: var(--ink-soft); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.matutina-day-nav select { width: 100%; min-width: 0; height: 42px; padding: 0 34px 0 11px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); text-overflow: ellipsis; background: var(--canvas); }
+.matutina-today-button { display: block; margin: 9px auto 18px; padding: 8px 15px; border: 0; color: var(--green); font-size: 12px; font-weight: 800; background: transparent; }
+.matutina-section { position: relative; margin: 14px; padding: 28px 22px 24px; border: 1px solid var(--line); border-radius: 26px; background: var(--paper); box-shadow: var(--shadow-sm); overflow: hidden; }
+.matutina-section-number { position: absolute; top: 14px; right: 18px; color: color-mix(in srgb, var(--ink-soft) 26%, transparent); font: 700 36px/1 Georgia, serif; }
+.matutina-section > .eyebrow { position: relative; z-index: 1; color: var(--gold); }
+.matutina-scripture { background: linear-gradient(145deg, color-mix(in srgb, var(--sage-soft) 55%, var(--paper)), var(--paper)); }
+.matutina-scripture blockquote { margin: 24px 0 13px; color: var(--green); font: 26px/1.5 Georgia, serif; }
+.matutina-scripture > strong { display: block; margin-top: 12px; font-size: 13px; }
+.matutina-open-bible { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 15px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; color: var(--green); background: var(--paper); }
+.matutina-open-bible .icon { width: 17px; }
+.matutina-prose { margin-top: 22px; color: var(--ink); font: 18px/1.72 Georgia, serif; }
+.matutina-prose p { margin: 0 0 18px; }.matutina-prose p:last-child { margin-bottom: 0; }
+.matutina-reflection { border-left: 4px solid var(--blue); }.matutina-challenge { border-left: 4px solid var(--coral); }.matutina-daily-prayer { border-left: 4px solid var(--gold); }
+.suggested-prayer-note { display: block; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+.matutina-complete { width: calc(100% - 28px); margin: 20px 14px 0; }
+.matutina-source { display: grid; gap: 4px; margin: 28px 22px 0; padding-top: 20px; border-top: 1px solid var(--line); color: var(--ink-soft); text-align: center; }
+.matutina-source strong { color: var(--ink); font: 700 20px Georgia, serif; }.matutina-source small { margin-top: 7px; font-size: 11px; }
+.matutina-loading { display: grid; place-items: center; align-content: center; min-height: calc(100dvh - 70px); padding: 34px 24px; color: var(--ink); text-align: center; background: var(--canvas); }
+.matutina-loading .matutina-hero-mark { color: #fffaf0; background: linear-gradient(145deg, #7e3924, #a25c34); }.matutina-loading h1 { margin: 12px 0 8px; font: 700 34px/1.1 Georgia, serif; }.matutina-loading > p:not(.eyebrow) { max-width: 310px; color: var(--ink-soft); }.matutina-loading .translation-loader { margin-top: 20px; }
+
+@media (max-width: 360px) {
+  .matutina-card { grid-template-columns: 54px minmax(0, 1fr); padding: 14px; }
+  .matutina-monogram { width: 54px; height: 68px; }
+  .matutina-progress { display: none; }
+  .matutina-section { margin-right: 10px; margin-left: 10px; padding-right: 18px; padding-left: 18px; }
+  .matutina-day-nav { margin-right: 10px; margin-left: 10px; }
+}
+
+.delete-account-setting strong { color: #a43d3d; }
+.danger-button {
+  width: 100%; min-height: 52px; border: 0; border-radius: 18px;
+  color: #fff; background: #a43d3d; font-weight: 800;
+}
+.danger-button:disabled { opacity: .55; }
+.delete-account-modal .modal-icon {
+  color: #a43d3d;
+  background: color-mix(in srgb, #a43d3d 12%, var(--surface));
+}
+.store-billing-notice {
+  margin: 14px 0; padding: 13px 15px; border: 1px solid var(--line);
+  border-radius: 15px; color: var(--ink-soft); background: var(--surface-soft);
+  font-size: 13px; line-height: 1.45;
+}

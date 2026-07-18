@@ -13,7 +13,8 @@ import { ADMOB_IDS } from "../src/config.mjs";
 import { prayerNotificationSchedule } from "../src/notification-service.mjs";
 import { searchBible } from "../src/bible-service.mjs";
 import { getCompletedBookProgress, getReadingPlanDay, getReadingPlanWeek, READING_PLAN_DAYS, YEAR_READING_PLAN } from "../src/reading-plan.mjs";
-import { selectionWords, translationMode } from "../src/translation-policy.mjs";
+import { alignParallelFragment, selectionWords, translationMode } from "../src/translation-policy.mjs";
+import { DEVOTIONAL_DAYS, DEVOTIONAL_SUGGESTED_PRAYERS, devotionalIndexForDate, getDailyYouthDevotional, getYouthDevotional } from "../src/devotional-year.mjs";
 
 test("completar la oración inicia una racha y entrega puntos", () => {
   const result = completeDailyPrayer({ streak: 0, points: 0, lastPrayerDate: null }, new Date(2026, 6, 13, 9));
@@ -98,6 +99,32 @@ test("una o dos palabras usan significado literal y las frases usan la Biblia pa
   assert.equal(translationMode("grace"), "literal");
   assert.equal(translationMode("by grace"), "literal");
   assert.equal(translationMode("saved by his grace"), "parallel-passage");
+});
+
+test("una frase devuelve solo su fragmento exacto de la Biblia paralela", () => {
+  const sourceText = "The LORD is nigh unto them that are of a broken heart; and saveth such as be of a contrite spirit.";
+  const targetText = "Cercano está Jehová a los quebrantados de corazón; Y salvará a los contritos de espíritu.";
+  assert.equal(alignParallelFragment({ selection: "The LORD is", sourceText, targetText, hint: "El Señor está" }).text, "Cercano está Jehová");
+  assert.equal(alignParallelFragment({ selection: "of a broken heart", sourceText, targetText, hint: "de corazón quebrantado" }).text, "quebrantados de corazón;");
+  assert.notEqual(alignParallelFragment({ selection: "The LORD is", sourceText, targetText, hint: "El Señor está" }).text, targetText);
+  assert.equal(alignParallelFragment({
+    selection: "Dad gracias en todo",
+    sourceText: "Dad gracias en todo; porque esta es la voluntad de Dios para con vosotros en Cristo Jesús.",
+    targetText: "In every thing give thanks: for this is the will of God in Christ Jesus concerning you."
+  }).text, "In every thing give thanks:");
+});
+
+test("la matutina anual contiene 365 días completos y navegables", () => {
+  assert.equal(DEVOTIONAL_DAYS, 365);
+  assert.equal(DEVOTIONAL_SUGGESTED_PRAYERS, 92);
+  const januaryFirst = getYouthDevotional(0);
+  const decemberLast = getYouthDevotional(364);
+  assert.equal(januaryFirst.id, "01-01");
+  assert.equal(decemberLast.id, "12-31");
+  assert.ok(januaryFirst.body.length > 0);
+  assert.ok(januaryFirst.verseQuote && januaryFirst.reflection && januaryFirst.challenge && januaryFirst.prayer);
+  assert.equal(getDailyYouthDevotional(new Date(2026, 6, 17)).id, "07-17");
+  assert.equal(devotionalIndexForDate(new Date(2028, 1, 29)), 58);
 });
 
 test("el estado de ánimo selecciona un versículo contextual", () => {
@@ -330,8 +357,8 @@ test("la versión mínima permite bloquear instalaciones antiguas", () => {
   assert.equal(compareVersions("2.0.0", "1.9.9"), 1);
 });
 
-test("la versión 1.8.0 usa el nuevo enlace de Bold y los anuncios iOS entregados", () => {
-  assert.equal(APP_VERSION, "1.8.0");
+test("la versión 1.9.0 usa el nuevo enlace de Bold y los anuncios iOS entregados", () => {
+  assert.equal(APP_VERSION, "1.9.0");
   assert.equal(BOLD_CHECKOUT_URL, "https://checkout.bold.co/payment/LNK_84NNU7YDX9");
   assert.equal(ADMOB_IDS.iosAppId, "ca-app-pub-8007313797348394~9653183215");
   assert.equal(ADMOB_IDS.appOpen.iosProduction, "ca-app-pub-8007313797348394/7027019877");
@@ -367,4 +394,15 @@ test("Android e iOS incluyen el sonido breve de guitarra para recordatorios", as
   assert.deepEqual(androidSound, iosSound);
   assert.match(serviceSource, /daily-prayer-guitar-v2/);
   assert.match(serviceSource, /LocalNotifications\.getPending/);
+});
+
+test("la edición publicable protege consentimiento, eliminación de cuenta y pagos de tienda", async () => {
+  const adsSource = await readFile(new URL("../src/ads.mjs", import.meta.url), "utf8");
+  const deleteAccountSource = await readFile(new URL("../supabase/functions/delete-account/index.ts", import.meta.url), "utf8");
+  const buildScript = await readFile(new URL("../scripts/build-android-apk.ps1", import.meta.url), "utf8");
+  assert.match(adsSource, /requestConsentInfo/);
+  assert.match(adsSource, /showConsentForm/);
+  assert.match(deleteAccountSource, /auth\.admin\.deleteUser/);
+  assert.match(buildScript, /\[switch\]\$PlayStore/);
+  assert.match(buildScript, /VITE_EXTERNAL_BILLING_ENABLED = if \(\$PlayStore\.IsPresent\) \{ 'false' \}/);
 });

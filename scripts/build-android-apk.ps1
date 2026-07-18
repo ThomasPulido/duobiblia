@@ -1,6 +1,7 @@
 param(
     [string]$NodePath = "",
-    [switch]$ProductionAds
+    [switch]$ProductionAds,
+    [switch]$PlayStore
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +45,8 @@ $env:DUOBIBLIA_KEY_ALIAS = 'duobiblia'
 $env:DUOBIBLIA_KEY_PASSWORD = $plainPassword
 $env:DUOBIBLIA_PRODUCTION_ADS = $ProductionAds.IsPresent.ToString().ToLowerInvariant()
 $env:VITE_ADMOB_PRODUCTION = $env:DUOBIBLIA_PRODUCTION_ADS
+$previousExternalBilling = $env:VITE_EXTERNAL_BILLING_ENABLED
+$env:VITE_EXTERNAL_BILLING_ENABLED = if ($PlayStore.IsPresent) { 'false' } else { 'true' }
 
 try {
     & $NodePath (Join-Path $workspace 'node_modules\vite\bin\vite.js') build
@@ -62,13 +65,14 @@ try {
     }
 
     $version = (Get-Content -LiteralPath (Join-Path $workspace 'package.json') -Raw | ConvertFrom-Json).version
+    $distributionSuffix = if ($PlayStore.IsPresent) { '-play' } else { '' }
     $releaseDirectory = Join-Path $workspace 'releases'
     New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
     $sourceApk = Join-Path $workspace 'android\app\build\outputs\apk\release\app-release.apk'
-    $destinationApk = Join-Path $releaseDirectory "DuoBiblia-$version.apk"
+    $destinationApk = Join-Path $releaseDirectory "DuoBiblia-$version$distributionSuffix.apk"
     Copy-Item -LiteralPath $sourceApk -Destination $destinationApk -Force
     $sourceBundle = Join-Path $workspace 'android\app\build\outputs\bundle\release\app-release.aab'
-    $destinationBundle = Join-Path $releaseDirectory "DuoBiblia-$version.aab"
+    $destinationBundle = Join-Path $releaseDirectory "DuoBiblia-$version$distributionSuffix.aab"
     Copy-Item -LiteralPath $sourceBundle -Destination $destinationBundle -Force
 
     $apksigner = Join-Path $sdk 'build-tools\36.0.0\apksigner.bat'
@@ -82,4 +86,5 @@ try {
     $plainPassword = $null
     $env:DUOBIBLIA_KEYSTORE_PASSWORD = $null
     $env:DUOBIBLIA_KEY_PASSWORD = $null
+    $env:VITE_EXTERNAL_BILLING_ENABLED = $previousExternalBilling
 }

@@ -8,6 +8,7 @@ DuoBiblia es una aplicación Android/iOS bilingüe para leer la Biblia, aprender
 - registro emocional diario y recomendación de un pasaje;
 - oración de mañana, tarde o noche según la hora local, cuatro instrumentales aleatorios, sonido activo por defecto y control animado;
 - recordatorios locales de oración a las 7:00, 15:00 y 21:30, configurados en el idioma elegido;
+- matutina juvenil “Valientes por dentro” con 365 lecturas, versículo, reflexión, reto y oración;
 - racha, puntos, meta de 90 días, reto diario y animaciones de logros;
 - lectura completa KJV y **Mi Biblia traducida**, extraída exclusivamente del PDF entregado por el propietario;
 - selección de una o varias palabras, traducción contextual de frases o versículos y pronunciación;
@@ -51,6 +52,7 @@ En Supabase:
 2. En Auth > Email Templates, usar `{{ .Token }}` en el mensaje para que el usuario reciba un código de seis dígitos.
 3. Activar Google como proveedor y registrar las URL web y `com.duobiblia.app://auth/callback` entre las redirecciones autorizadas.
 4. Añadir las credenciales OAuth de Google en el panel de Supabase.
+5. Desplegar `supabase functions deploy delete-account` para activar la eliminación permanente dentro de la app y desde la web.
 
 La primera autenticación combina el progreso que ya existe en el celular con el perfil remoto; los puntos y la racha conservan el valor mayor y se unen favoritos y notas.
 
@@ -80,6 +82,8 @@ El backend verifica `x-bold-signature`, acepta únicamente `SALE_APPROVED`, exig
 Cada pago aprobado añade un mes a la fecha vigente; al vencer, Premium se desactiva automáticamente. El enlace compartido de Bold no permite cobrar otra vez por sí solo. Para una renovación automática real se necesita que Bold habilite la **API de Pagos en Línea recurrentes**, entregue una clave de producción y apruebe la integración. Nunca se almacenan números de tarjeta en DuoBiblia.
 
 Importante para las tiendas: Google Play y Apple normalmente exigen sus propios sistemas de compra para desbloquear funciones digitales. El enlace Bold puede usarse en una distribución directa o solo en programas/regiones donde la tienda autorice ofertas externas. Para un build de tienda sin esa autorización, compilar con `VITE_EXTERNAL_BILLING_ENABLED=false`; habilitar Bold sin cumplir la política puede causar rechazo.
+
+El script firmado separa ambas distribuciones: `./scripts/build-android-apk.ps1 -ProductionAds` crea el APK directo con Bold; `./scripts/build-android-apk.ps1 -ProductionAds -PlayStore` crea `DuoBiblia-VERSION-play.aab` sin enlaces externos. La compra dentro de Google Play debe activarse únicamente después de crear y verificar la suscripción correspondiente con Play Billing.
 
 Referencias oficiales: [Bold API de pagos](https://www.developers.bold.co/pagos-en-linea/api-de-pagos-en-linea), [Bold webhooks](https://developers.bold.co/webhook), [Supabase OTP](https://supabase.com/docs/reference/javascript/auth-signinwithotp), [Google Play payments](https://support.google.com/googleplay/android-developer/answer/10281818) y [Apple App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/).
 
@@ -148,6 +152,8 @@ Para entregar a testers sin cable, usar el APK firmado de `releases` o una pista
 ## Publicación
 
 Android se firma y entrega como `.aab` desde Android Studio. iOS se archiva desde Xcode y se sube a App Store Connect. Antes de revisión se necesitan política de privacidad, términos, soporte, eliminación de cuenta, ficha de seguridad de datos, consentimiento de anuncios, capturas y credenciales de revisión.
+
+El sitio público preparado en `docs/` incluye soporte, política de privacidad y eliminación web autenticada por código. Debe habilitarse GitHub Pages desde la rama principal, carpeta `/docs`. `app-ads.txt` debe estar además en la raíz del dominio de desarrollador enlazado desde la ficha de Google Play; una URL de proyecto de GitHub Pages no sustituye esa raíz.
 
 El ID nativo actual es `com.duobiblia.app`. Debe conservarse una vez publicada la primera versión.
 

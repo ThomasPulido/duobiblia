@@ -19,28 +19,30 @@ import {
 } from "./src/core.mjs";
 import { getAnnualDevotional } from "./src/daily-content.mjs";
 import { getDailyQuizSet } from "./src/annual-quizzes.mjs";
-import { initializeMobileAds, showAchievementInterstitial } from "./src/ads.mjs";
+import { initializeMobileAds, showAchievementInterstitial, showAdPrivacyOptions } from "./src/ads.mjs";
 import { App as MobileApp } from "@capacitor/app";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { BIBLE_VERSIONS, getBibleChapter, searchBible } from "./src/bible-service.mjs";
 import { chooseNextTrack, prayerTracks } from "./src/music.mjs";
 import { translateWithContext } from "./src/translation-service.mjs";
-import { selectionWords, translationMode } from "./src/translation-policy.mjs";
-import { authConfigured, claimStreakReward, getAuthCapabilities, getEntitlement, initializeAuth, mergeProgress, sendEmailCode, signInWithGoogle, signOut, syncProgress, verifyEmailCode } from "./src/auth-service.mjs";
+import { alignParallelFragment, selectionWords, translationMode } from "./src/translation-policy.mjs";
+import { authConfigured, claimStreakReward, deleteAccount, getAuthCapabilities, getEntitlement, initializeAuth, mergeProgress, sendEmailCode, signInWithGoogle, signOut, syncProgress, verifyEmailCode } from "./src/auth-service.mjs";
 import { externalBillingEnabled, openBoldCheckout } from "./src/billing-service.mjs";
 import { APP_VERSION, checkRequiredUpdate, openRequiredUpdate } from "./src/update-service.mjs";
 import { syncNativePremiumState } from "./src/native-state.mjs";
 import { disablePrayerNotifications, enablePrayerNotifications, initializePrayerNotifications, refreshPrayerNotifications } from "./src/notification-service.mjs";
 import { findReadingPlanChapter, getCompletedBookProgress, getReadingPlanDay, getReadingPlanWeek, nextIncompletePlanDay, READING_PLAN_DAYS } from "./src/reading-plan.mjs";
+import { DEVOTIONAL_DAYS, DEVOTIONAL_SUBTITLE, DEVOTIONAL_TITLE, devotionalIndexForDate, getDailyYouthDevotionalPreview, getYouthDevotionalPreview } from "./src/devotional-calendar.mjs";
+import { openAccountDeletionPage, openPrivacyPolicy } from "./src/legal-service.mjs";
 
 const STORAGE_KEY = "duobiblia-state-v1";
 const STORAGE_BACKUP_KEY = "duobiblia-state-backup-v1";
-const DATA_SCHEMA_VERSION = 5;
+const DATA_SCHEMA_VERSION = 6;
 const PERSISTED_PROGRESS_FIELDS = [
   "streak", "points", "lastPrayerDate", "lastPrayerCompletedAt", "prayerCompletions",
   "favorites", "notes", "highlights", "verseRecords", "completedPlanDays", "moodDate",
   "quizCompleted", "quizAnswer", "lastQuizDate", "lastQuizAdDate", "dailyQuizDate",
-  "dailyQuizAnswers", "dailyQuizCompleted", "quizStats", "uiLang", "bibleVersion"
+  "dailyQuizAnswers", "dailyQuizCompleted", "quizStats", "completedDevotionalDays", "devotionalDay", "uiLang", "bibleVersion"
 ];
 const initialState = {
   dataSchemaVersion: DATA_SCHEMA_VERSION,
@@ -83,6 +85,11 @@ const initialState = {
   premiumUntil: null,
   readChapters: 0,
   completedPlanDays: [],
+  completedDevotionalDays: [],
+  devotionalDay: devotionalIndexForDate(),
+  devotionalContent: null,
+  devotionalLoading: false,
+  devotionalError: null,
   readingPlanWeek: 1,
   activePlanDay: null,
   progressUpdatedAt: null,
@@ -109,6 +116,7 @@ const initialState = {
 let state = loadState();
 let prayerAudio = null;
 let progressSyncTimer = null;
+let devotionalLoadPromise = null;
 let prayerOpenedFromNotification = false;
 let activeSelectionKey = null;
 const NativeVerseShare = registerPlugin("VerseShare");
@@ -126,6 +134,11 @@ function loadState() {
       .map(Number)
       .filter((day) => Number.isInteger(day) && day >= 1 && day <= READING_PLAN_DAYS))].sort((a, b) => a - b);
     restored.readChapters = restored.completedPlanDays.length;
+    restored.completedDevotionalDays = [...new Set((restored.completedDevotionalDays || []).filter((id) => /^\d{2}-\d{2}$/.test(id)))];
+    const restoredDevotionalDay = Number(restored.devotionalDay);
+    restored.devotionalDay = Number.isInteger(restoredDevotionalDay)
+      ? Math.max(0, Math.min(DEVOTIONAL_DAYS - 1, restoredDevotionalDay))
+      : devotionalIndexForDate();
     restored.readingPlanWeek = Math.max(1, Math.min(53, Number(restored.readingPlanWeek) || 1));
     restored.prayerCompletions = { ...(restored.prayerCompletions || {}) };
     restored.dailyQuizAnswers = { language: null, bible: null, ...(restored.dailyQuizAnswers || {}) };
@@ -159,7 +172,7 @@ function loadState() {
       restored.progressRevision = (Number(restored.progressRevision) || 0) + 1;
     }
     restored.fieldUpdatedAt = { ...(restored.fieldUpdatedAt || {}) };
-    if (saved && savedSchema < 5) {
+    if (saved && savedSchema < DATA_SCHEMA_VERSION) {
       const migratedAt = restored.progressUpdatedAt || new Date().toISOString();
       for (const field of PERSISTED_PROGRESS_FIELDS) {
         if (!(field in restored.fieldUpdatedAt)) restored.fieldUpdatedAt[field] = migratedAt;
@@ -200,7 +213,7 @@ function readLatestSavedState() {
 }
 
 function persist() {
-  const { phase, modal, audioPlaying, kjvChapter, kjvLoading, kjvError, fullSearchResults, fullSearchLoading, authUser, authLoading, authError, pendingPremium, updateRequired, ...persistable } = state;
+  const { phase, modal, audioPlaying, kjvChapter, kjvLoading, kjvError, fullSearchResults, fullSearchLoading, devotionalContent, devotionalLoading, devotionalError, authUser, authLoading, authError, pendingPremium, updateRequired, ...persistable } = state;
   const payload = JSON.stringify(persistable);
   localStorage.setItem(STORAGE_KEY, payload);
   localStorage.setItem(STORAGE_BACKUP_KEY, payload);
@@ -218,6 +231,8 @@ function progressStateSignature(value) {
     highlights: value.highlights,
     verseRecords: value.verseRecords,
     completedPlanDays: value.completedPlanDays,
+    completedDevotionalDays: value.completedDevotionalDays,
+    devotionalDay: value.devotionalDay,
     moodDate: value.moodDate,
     quizCompleted: value.quizCompleted,
     quizAnswer: value.quizAnswer,
@@ -319,6 +334,8 @@ function icon(name, label = "") {
     pause: '<path d="M8 5v14M16 5v14"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     crown: '<path d="m3 7 4 5 5-8 5 8 4-5-2 12H5L3 7Z"/>',
+    shield: '<path d="M12 3 5 6v5c0 4.7 2.8 8 7 10 4.2-2 7-5.3 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/>',
+    trash: '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
     close: '<path d="m6 6 12 12M18 6 6 18"/>',
     volume: '<path d="M11 5 6 9H2v6h4l5 4V5ZM15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/>',
     music: '<path d="M9 18V6l10-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>',
@@ -554,7 +571,7 @@ function renderMoodCheck() {
 }
 
 function renderShell() {
-  const deepRoute = ["prayer", "reader", "chapter", "topics", "reading-plan"].includes(state.route);
+  const deepRoute = ["prayer", "reader", "chapter", "topics", "reading-plan", "devotional"].includes(state.route);
   return `
     <div class="app-shell">
       ${deepRoute ? renderDeepHeader() : renderTopBar()}
@@ -599,7 +616,8 @@ function renderDeepHeader() {
     reader: dualText(selectedVerse.reference.es, selectedVerse.reference.en),
     chapter: dualText(`${book.es} ${state.selectedChapter}`, `${book.en} ${state.selectedChapter}`),
     topics: dualText("Palabras para hoy", "Words for today"),
-    "reading-plan": dualText("Plan de lectura", "Reading plan")
+    "reading-plan": dualText("Plan de lectura", "Reading plan"),
+    devotional: dualText("Matutina", "Morning devotional")
   };
   return `
     <header class="deep-header">
@@ -673,7 +691,8 @@ function renderRoute() {
     reader: renderReader,
     chapter: renderKjvChapter,
     topics: renderTopics,
-    "reading-plan": renderReadingPlan
+    "reading-plan": renderReadingPlan,
+    devotional: renderYouthDevotional
   };
   return (routes[state.route] || renderHome)();
 }
@@ -683,6 +702,8 @@ function renderHome() {
   const verseRecord = featuredVerseRecord(verse, state.uiLang);
   const prayer = getPrayerExperience();
   const prayerDone = hasCompletedPrayer(state, new Date(), prayer.period);
+  const youthDevotional = getDailyYouthDevotionalPreview();
+  const youthDevotionalDone = state.completedDevotionalDays.includes(youthDevotional.id);
   return `
     <section class="reference-home-hero ${highlightClass(verseRecord.key)}" ${verseHostAttributes(verseRecord)}>
       <div class="hero-backdrop" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -704,6 +725,15 @@ function renderHome() {
         <span class="ritual-period-icon ritual-${prayer.period}">${icon(prayer.iconName)}</span>
         <div><strong>${prayerDone ? dualText("Oración completada", "Prayer completed") : dualObject(prayer.duration)}</strong>${dualText("Versículo · Meditación · Oración", "Verse · Meditation · Prayer", "card-secondary")}</div>
         <span class="round-arrow">${icon("play")}</span>
+      </button>
+    </section>
+
+    <section class="section-block matutina-preview">
+      <div class="section-title"><div><span class="eyebrow">${dualText("MATUTINA PARA ADOLESCENTES", "MORNING DEVOTIONAL FOR TEENS")}</span><h2>${escapeHtml(DEVOTIONAL_TITLE)}</h2></div><span class="completion-mark ${youthDevotionalDone ? "done" : ""}">${youthDevotionalDone ? icon("check") : youthDevotional.day}</span></div>
+      <button class="matutina-card" data-action="open-devotional">
+        <span class="matutina-monogram">V</span>
+        <div><small>${escapeHtml(`${youthDevotional.day} de ${youthDevotional.monthName}`)}</small><strong>${escapeHtml(youthDevotional.title)}</strong><p>“${escapeHtml(youthDevotional.verseQuote)}”</p></div>
+        <span class="matutina-progress"><b>${state.completedDevotionalDays.length}</b><small>/365</small></span>
       </button>
     </section>
 
@@ -855,16 +885,114 @@ function renderProfile() {
         <button data-action="show-favorites"><span class="setting-icon coral">${spotIllustration("favorite")}</span><div><strong>${dualText("Versículos favoritos", "Favorite verses")}</strong><small>${state.favorites.length} ${dualText("guardados", "saved")}</small></div>${icon("chevron")}</button>
         <button data-action="show-notes"><span class="setting-icon gold">${spotIllustration("note")}</span><div><strong>${dualText("Mis notas", "My notes")}</strong><small>${Object.keys(state.notes).length} ${dualText("notas personales", "personal notes")}</small></div>${icon("chevron")}</button>
         <button data-action="open-reading-plan"><span class="setting-icon sage">${spotIllustration("plan")}</span><div><strong>${dualText("Plan de lectura", "Reading plan")}</strong><small>${state.completedPlanDays.length}/365 ${dualText("días", "days")}</small></div>${icon("chevron")}</button>
+        <button data-action="open-devotional"><span class="setting-icon gold">${spotIllustration("bible")}</span><div><strong>${dualText("Matutina anual", "Yearly morning devotional")}</strong><small>${state.completedDevotionalDays.length}/365 ${dualText("días leídos", "days read")}</small></div>${icon("chevron")}</button>
       </section>
       <section class="settings-list compact">
         <h2>${dualText("Preferencias", "Preferences")}</h2>
         <button data-action="switch-language"><span class="setting-icon blue">${spotIllustration("translate")}</span><div><strong>${dualText("Idioma de la aplicación", "App language")}</strong><small>${state.uiLang === "es" ? dualText("Español · preferido para aprender español", "Spanish · preferred for learning Spanish") : dualText("English · preferred for learning English", "Inglés · preferido para aprender inglés")}</small></div><span class="language-code">${state.uiLang.toUpperCase()}</span></button>
         <button data-action="toggle-theme"><span class="setting-icon violet">${icon(state.dark ? "sun" : "moon")}</span><div><strong>${dualText("Apariencia", "Appearance")}</strong><small>${state.dark ? dualText("Modo oscuro", "Dark mode") : dualText("Modo claro", "Light mode")}</small></div><span class="toggle ${state.dark ? "on" : ""}"><i></i></span></button>
         <button data-action="toggle-notifications"><span class="setting-icon gold">${spotIllustration("prayer")}</span><div><strong>${dualText("Recordatorios de oración", "Prayer reminders")}</strong><small>${state.notificationsEnabled ? dualText("7:00 · 15:00 · 21:30", "7:00 AM · 3:00 PM · 9:30 PM") : dualText("Desactivados", "Off")}</small></div><span class="toggle ${state.notificationsEnabled ? "on" : ""}"><i></i></span></button>
+        <button data-action="ad-privacy-options"><span class="setting-icon blue">${icon("shield")}</span><div><strong>${dualText("Privacidad de anuncios", "Ad privacy")}</strong><small>${dualText("Revisar opciones de consentimiento", "Review consent choices")}</small></div>${icon("chevron")}</button>
+        <button data-action="open-privacy-policy"><span class="setting-icon sage">${icon("shield")}</span><div><strong>${dualText("Política de privacidad", "Privacy policy")}</strong><small>${dualText("Datos, proveedores y eliminación", "Data, providers, and deletion")}</small></div>${icon("chevron")}</button>
         ${state.account ? `<button data-action="sign-out"><span class="setting-icon coral">${icon("close")}</span><div><strong>${text("Cerrar sesión", "Sign out")}</strong><small>${text("El progreso local permanece en este dispositivo", "Local progress stays on this device")}</small></div>${icon("chevron")}</button>` : ""}
+        ${state.account ? `<button class="delete-account-setting" data-action="open-delete-account"><span class="setting-icon coral">${icon("trash")}</span><div><strong>${dualText("Eliminar cuenta y datos", "Delete account and data")}</strong><small>${dualText("Esta acción es permanente", "This action is permanent")}</small></div>${icon("chevron")}</button>` : ""}
       </section>
       <p class="version-label">DuoBiblia · ${APP_VERSION}</p>
     </section>`;
+}
+
+async function loadYouthDevotionalContent() {
+  if (state.devotionalContent) return state.devotionalContent;
+  if (!devotionalLoadPromise) devotionalLoadPromise = import("./src/devotional-year.mjs");
+  setState({ devotionalLoading: true, devotionalError: null }, false);
+  try {
+    const module = await devotionalLoadPromise;
+    setState({ devotionalContent: module.devotionalYear, devotionalLoading: false, devotionalError: null }, false);
+    return module.devotionalYear;
+  } catch (error) {
+    devotionalLoadPromise = null;
+    setState({ devotionalLoading: false, devotionalError: error.message || "Devotional unavailable" }, false);
+    return null;
+  }
+}
+
+function renderYouthDevotional() {
+  if (!state.devotionalContent) {
+    return `<section class="matutina-loading"><span class="matutina-hero-mark"><span>V</span><small>365</small></span><p class="eyebrow">${dualText("MATUTINA PARA ADOLESCENTES", "MORNING DEVOTIONAL FOR TEENS")}</p><h1>${escapeHtml(DEVOTIONAL_TITLE)}</h1><p>${state.devotionalError ? dualText("No pudimos abrir el contenido. Inténtalo de nuevo.", "We couldn't open the content. Please try again.") : dualText("Abriendo la lectura de hoy…", "Opening today's reading…")}</p>${state.devotionalError ? `<button class="primary-button" data-action="retry-devotional">${dualText("Reintentar", "Try again")}</button>` : `<span class="translation-loader">${icon("bible")}</span>`}</section>`;
+  }
+  const index = Math.max(0, Math.min(DEVOTIONAL_DAYS - 1, Number(state.devotionalDay) || 0));
+  const day = state.devotionalContent.days[index];
+  const completed = state.completedDevotionalDays.includes(day.id);
+  const date = new Date(2025, day.month - 1, day.day);
+  const dateLabel = new Intl.DateTimeFormat(state.uiLang === "es" ? "es-CO" : "en-US", { day: "numeric", month: "long" }).format(date);
+  const verseRecord = {
+    key: day.bookId ? `bible:mi-biblia:${day.bookId}:${day.chapter}:${day.verse}` : `devotional-verse:${day.id}`,
+    text: day.verseQuote,
+    reference: day.reference,
+    sourceLang: "es",
+    version: "mi-biblia",
+    bookId: day.bookId || "",
+    chapter: day.chapter || "",
+    verse: day.verse || ""
+  };
+  const reflectionParagraphs = day.reflection.split(/\n\s*\n/).filter(Boolean);
+  const challengeParagraphs = day.challenge.split(/\n\s*\n/).filter(Boolean);
+  const prayerParagraphs = day.prayer.split(/\n\s*\n/).filter(Boolean);
+  return `
+    <article class="youth-devotional">
+      <header class="matutina-hero">
+        <div class="matutina-hero-mark"><span>V</span><small>${index + 1}/365</small></div>
+        <p class="eyebrow">${dualText("MATUTINA PARA ADOLESCENTES", "MORNING DEVOTIONAL FOR TEENS")}</p>
+        <h1>${escapeHtml(day.title)}</h1>
+        <p class="matutina-date">${escapeHtml(dateLabel)} · ${escapeHtml(day.monthTheme)}</p>
+        <div class="matutina-year-progress"><span style="width:${(index + 1) / DEVOTIONAL_DAYS * 100}%"></span></div>
+      </header>
+
+      <nav class="matutina-day-nav" aria-label="${text("Elegir día de la matutina", "Choose devotional day")}">
+        <button class="icon-button bordered" data-action="devotional-previous" aria-label="${text("Día anterior", "Previous day")}">${icon("back")}</button>
+        <label><span>${dualText("Día del año", "Day of the year")}</span><select id="devotional-picker">${state.devotionalContent.days.map((item, dayIndex) => `<option value="${dayIndex}" ${dayIndex === index ? "selected" : ""}>${dayIndex + 1}. ${escapeHtml(item.title)}</option>`).join("")}</select></label>
+        <button class="icon-button bordered" data-action="devotional-next" aria-label="${text("Día siguiente", "Next day")}">${icon("chevron")}</button>
+      </nav>
+      <button class="matutina-today-button" data-action="devotional-today">${dualText("Volver a la matutina de hoy", "Return to today's devotional")}</button>
+
+      <section class="matutina-section matutina-scripture ${highlightClass(verseRecord.key)}" ${verseHostAttributes(verseRecord)}>
+        <span class="matutina-section-number">01</span><p class="eyebrow">${dualText("VERSÍCULO", "SCRIPTURE")}</p>
+        <blockquote>“${renderInteractiveText(day.verseQuote)}”</blockquote>
+        ${renderSelectionBar()}
+        <strong>${escapeHtml(day.reference)}</strong>
+        ${renderVerseTools(verseRecord)}
+        ${day.bookId ? `<button class="matutina-open-bible" data-action="open-bible-verse" data-version="mi-biblia" data-book-id="${day.bookId}" data-chapter="${day.chapter}" data-verse-number="${day.verse}">${dualText("Leer en la Biblia", "Read in the Bible")} ${icon("chevron")}</button>` : ""}
+      </section>
+
+      <section class="matutina-section matutina-reading" ${selectionHostAttributes(`devotional:${day.id}:reading`, day.body.join("\n\n"), "es")}>
+        <span class="matutina-section-number">02</span><p class="eyebrow">${dualText("LECTURA", "READING")}</p>
+        <div class="matutina-prose">${renderInteractiveParagraphs(day.body)}</div>
+        ${renderSelectionBar()}
+      </section>
+
+      <section class="matutina-section matutina-reflection" ${selectionHostAttributes(`devotional:${day.id}:reflection`, day.reflection, "es")}>
+        <span class="matutina-section-number">03</span><p class="eyebrow">${dualText("REFLEXIÓN", "REFLECTION")}</p>
+        <div class="matutina-prose">${renderInteractiveParagraphs(reflectionParagraphs)}</div>
+        ${renderSelectionBar()}
+      </section>
+
+      <section class="matutina-section matutina-challenge" ${selectionHostAttributes(`devotional:${day.id}:challenge`, day.challenge, "es")}>
+        <span class="matutina-section-number">04</span><p class="eyebrow">${dualText("RETO DEL DÍA", "CHALLENGE OF THE DAY")}</p>
+        <div class="matutina-prose">${renderInteractiveParagraphs(challengeParagraphs)}</div>
+        ${renderSelectionBar()}
+      </section>
+
+      <section class="matutina-section matutina-daily-prayer" ${selectionHostAttributes(`devotional:${day.id}:prayer`, day.prayer, "es")}>
+        <span class="matutina-section-number">05</span><p class="eyebrow">${day.prayerSuggested ? dualText("ORACIÓN SUGERIDA", "SUGGESTED PRAYER") : dualText("ORACIÓN", "PRAYER")}</p>
+        <div class="matutina-prose">${renderInteractiveParagraphs(prayerParagraphs)}</div>
+        ${renderSelectionBar()}
+        ${day.prayerSuggested ? `<small class="suggested-prayer-note">${dualText("Esta oración completa un día que no la incluía en el archivo recibido.", "This prayer completes a day that did not include one in the supplied file.")}</small>` : ""}
+      </section>
+
+      <button class="amen-button matutina-complete ${completed ? "completed" : ""}" data-action="complete-devotional">${completed ? icon("check") : ""}${completed ? dualText("Matutina completada", "Devotional completed") : dualText("Completar matutina", "Complete devotional")}</button>
+      <p class="amen-hint">${dualText(`${state.completedDevotionalDays.length} de 365 días guardados automáticamente`, `${state.completedDevotionalDays.length} of 365 days saved automatically`)}</p>
+      <footer class="matutina-source"><strong>${escapeHtml(DEVOTIONAL_TITLE)}</strong><span>${escapeHtml(DEVOTIONAL_SUBTITLE)}</span><small>${dualText("Contenido original entregado para DuoBiblia · selecciónalo para traducir", "Original content supplied for DuoBiblia · select it to translate")}</small></footer>
+    </article>`;
 }
 
 function renderPrayer() {
@@ -912,13 +1040,21 @@ function renderPrayer() {
     </article>`;
 }
 
-function renderInteractiveText(value) {
-  let tokenIndex = 0;
+function renderInteractiveTokens(value, tokenState) {
   return value.split(/(\s+)/).map((token) => {
     if (/^\s+$/.test(token)) return token;
-    const index = tokenIndex++;
+    const index = tokenState.index++;
     return `<button class="word-token" data-action="select-word" data-token-index="${index}" data-word="${escapeHtml(token)}">${escapeHtml(token)}</button>`;
   }).join("");
+}
+
+function renderInteractiveText(value) {
+  return renderInteractiveTokens(value, { index: 0 });
+}
+
+function renderInteractiveParagraphs(paragraphs) {
+  const tokenState = { index: 0 };
+  return paragraphs.map((paragraph) => `<p>${renderInteractiveTokens(paragraph, tokenState)}</p>`).join("");
 }
 
 function renderReader() {
@@ -1029,7 +1165,7 @@ function renderModal() {
   }
   if (state.modal.type === "translation") {
     const help = state.modal.help;
-    return `<div class="modal-layer bottom-layer" data-action="close-on-backdrop"><div class="bottom-sheet">${close}<div class="sheet-handle"></div><div class="translation-heading"><div><span class="eyebrow">${text("TRADUCCIÓN EN CONTEXTO", "CONTEXTUAL TRANSLATION")}</span><h2>${escapeHtml(state.modal.word)}</h2></div><button class="sound-button" data-action="speak-word" data-word="${escapeHtml(state.modal.word)}" data-language="${state.modal.sourceLang || "en"}">${icon("volume")}</button></div><div class="translation-main"><strong>${escapeHtml(help.translated ?? help.es)}</strong><span>${escapeHtml(help.pronunciation)} · ${escapeHtml(help.type)}</span></div><p>${escapeHtml(help.meaning)}</p><div class="context-box ${help.parallelText ? "bible-parallel-box" : ""}"><span>${help.parallelText ? dualText("PASAJE BÍBLICO PARALELO", "PARALLEL BIBLE PASSAGE") : text("EN ESTA FRASE", "IN THIS PHRASE")}</span><strong>${escapeHtml(help.parallelReference || help.phrase)}</strong>${help.parallelText ? `<small>${escapeHtml(help.phrase)}</small>` : ""}<p>${escapeHtml(help.phraseEs)}</p></div><button class="primary-button" data-action="close-modal">${text("Entendido", "Got it")}</button></div></div>`;
+    return `<div class="modal-layer bottom-layer" data-action="close-on-backdrop"><div class="bottom-sheet">${close}<div class="sheet-handle"></div><div class="translation-heading"><div><span class="eyebrow">${text("TRADUCCIÓN EN CONTEXTO", "CONTEXTUAL TRANSLATION")}</span><h2>${escapeHtml(state.modal.word)}</h2></div><button class="sound-button" data-action="speak-word" data-word="${escapeHtml(state.modal.word)}" data-language="${state.modal.sourceLang || "en"}">${icon("volume")}</button></div><div class="translation-main"><strong>${escapeHtml(help.translated ?? help.es)}</strong><span>${escapeHtml(help.pronunciation)} · ${escapeHtml(help.type)}</span></div><p>${escapeHtml(help.meaning)}</p><div class="context-box ${help.parallelText ? "bible-parallel-box" : ""}"><span>${help.parallelText ? dualText("FRAGMENTO BÍBLICO EQUIVALENTE", "EQUIVALENT BIBLE FRAGMENT") : text("EN ESTA FRASE", "IN THIS PHRASE")}</span><strong>${escapeHtml(help.parallelReference || help.phrase)}</strong>${help.parallelText ? `<small>${escapeHtml(help.phrase)}</small>` : ""}<p>${escapeHtml(help.phraseEs)}</p></div><button class="primary-button" data-action="close-modal">${text("Entendido", "Got it")}</button></div></div>`;
   }
   if (state.modal.type === "translation-loading") {
     return `<div class="modal-layer bottom-layer"><div class="bottom-sheet translation-loading-sheet">${close}<div class="sheet-handle"></div><span class="translation-loader">${icon("translate")}</span><h2>${dualText("Preparando traducción", "Preparing translation")}</h2><p>${dualText("Buscando el pasaje paralelo y conservando su contexto…", "Finding the parallel passage and preserving its context…")}</p></div></div>`;
@@ -1069,8 +1205,14 @@ function renderModal() {
   if (state.modal.type === "account-success") {
     return `<div class="modal-layer"><div class="modal-card success-modal">${close}<span class="success-check">${icon("check")}</span><h2>${text("¡Progreso integrado!", "Progress merged!")}</h2><p>${text("Tu racha, puntos, notas y favoritos ahora forman parte de tu perfil.", "Your streak, points, notes, and favorites are now part of your profile.")}</p><button class="primary-button" data-action="close-modal">${text("Ir a mi perfil", "Go to my profile")}</button></div></div>`;
   }
+  if (state.modal.type === "delete-account") {
+    return `<div class="modal-layer"><div class="modal-card delete-account-modal">${close}<span class="modal-icon">${icon("trash")}</span><p class="eyebrow">${dualText("ELIMINACIÓN PERMANENTE", "PERMANENT DELETION")}</p><h2>${dualText("¿Eliminar tu cuenta?", "Delete your account?")}</h2><p>${dualText("Se eliminarán tu cuenta, perfil y progreso sincronizado. También se borrarán los datos locales de este dispositivo. Esta acción no se puede deshacer.", "Your account, profile, and synced progress will be deleted. Local data on this device will also be erased. This cannot be undone.")}</p>${state.authError ? `<p class="auth-error">${escapeHtml(state.authError)}</p>` : ""}<button class="danger-button" data-action="confirm-delete-account" ${state.authLoading ? "disabled" : ""}>${state.authLoading ? dualText("Eliminando…", "Deleting…") : dualText("Sí, eliminar definitivamente", "Yes, permanently delete")}</button><button class="secondary-button" data-action="close-modal">${dualText("Conservar mi cuenta", "Keep my account")}</button></div></div>`;
+  }
   if (state.modal.type === "premium") {
-    return `<div class="modal-layer premium-layer"><div class="modal-card premium-modal">${close}<div class="premium-mark">${icon("crown")}</div><p class="eyebrow">DUOBIBLIA PREMIUM</p><h2>${text("Más calma. Más aprendizaje. Sin anuncios.", "More calm. More learning. No ads.")}</h2><p class="premium-price"><strong>$2</strong><span>USD<br/>/${text("mes", "month")}</span></p><small>${text("Al precio de un café y un pan", "For the price of coffee and bread")}</small>${state.premiumUntil ? `<p class="subscription-status">${text("Activo hasta", "Active until")} <strong>${new Intl.DateTimeFormat(state.uiLang === "es" ? "es-CO" : "en-US", { dateStyle: "medium" }).format(new Date(state.premiumUntil))}</strong></p>` : ""}<ul><li>${icon("check")} ${text("Lectura y audio sin conexión", "Offline reading and audio")}</li><li>${icon("check")} ${text("Sin anuncios", "No ads")}</li><li>${icon("check")} ${text("Traducciones y notas ilimitadas", "Unlimited translations and notes")}</li></ul><button class="primary-button" data-action="activate-premium" ${!externalBillingEnabled ? "disabled" : ""}>${state.premium ? text("Renovar otro mes con Bold", "Renew another month with Bold") : text("Pagar de forma segura con Bold", "Pay securely with Bold")}</button><button class="secondary-button" data-action="verify-premium">${text("Ya pagué · Verificar", "I paid · Verify")}</button><p class="billing-email">${text("Paga usando el mismo correo de tu cuenta:", "Pay using the same email as your account:")} <strong>${escapeHtml(state.account?.email || "")}</strong></p><button class="secondary-button" data-action="close-modal">${text("Ahora no", "Not now")}</button><p class="legal-mini">${text("Cada pago aprobado añade un mes. El plan se desactiva al vencer; el cobro automático requiere activar la API recurrente de Bold para este comercio.", "Each approved payment adds one month. The plan turns off when it expires; automatic billing requires Bold's recurring API to be enabled for this merchant.")}</p></div></div>`;
+    const billingControls = externalBillingEnabled
+      ? `<button class="primary-button" data-action="activate-premium">${state.premium ? text("Renovar otro mes con Bold", "Renew another month with Bold") : text("Pagar de forma segura con Bold", "Pay securely with Bold")}</button><button class="secondary-button" data-action="verify-premium">${text("Ya pagué · Verificar", "I paid · Verify")}</button><p class="billing-email">${text("Paga usando el mismo correo de tu cuenta:", "Pay using the same email as your account:")} <strong>${escapeHtml(state.account?.email || "")}</strong></p><p class="legal-mini">${text("Cada pago aprobado añade un mes. El plan se desactiva al vencer; el cobro automático requiere activar la API recurrente de Bold para este comercio.", "Each approved payment adds one month. The plan turns off when it expires; automatic billing requires Bold's recurring API to be enabled for this merchant.")}</p>`
+      : `<div class="store-billing-notice">${dualText("La compra estará disponible aquí cuando la suscripción de Google Play quede configurada.", "Purchase will be available here once the Google Play subscription is configured.")}</div>`;
+    return `<div class="modal-layer premium-layer"><div class="modal-card premium-modal">${close}<div class="premium-mark">${icon("crown")}</div><p class="eyebrow">DUOBIBLIA PREMIUM</p><h2>${text("Más calma. Más aprendizaje. Sin anuncios.", "More calm. More learning. No ads.")}</h2><p class="premium-price"><strong>$2</strong><span>USD<br/>/${text("mes", "month")}</span></p><small>${text("Al precio de un café y un pan", "For the price of coffee and bread")}</small>${state.premiumUntil ? `<p class="subscription-status">${text("Activo hasta", "Active until")} <strong>${new Intl.DateTimeFormat(state.uiLang === "es" ? "es-CO" : "en-US", { dateStyle: "medium" }).format(new Date(state.premiumUntil))}</strong></p>` : ""}<ul><li>${icon("check")} ${text("Lectura y audio sin conexión", "Offline reading and audio")}</li><li>${icon("check")} ${text("Sin anuncios", "No ads")}</li><li>${icon("check")} ${text("Traducciones y notas ilimitadas", "Unlimited translations and notes")}</li></ul>${billingControls}<button class="secondary-button" data-action="close-modal">${text("Ahora no", "Not now")}</button></div></div>`;
   }
   if (state.modal.type === "payment-pending") {
     return `<div class="modal-layer"><div class="modal-card payment-pending-modal">${close}<span class="success-check">${icon("check")}</span><p class="eyebrow">BOLD</p><h2>${text("Completa el pago en la ventana segura", "Complete payment in the secure window")}</h2><p>${text("Cuando Bold confirme el pago, vuelve aquí y toca Verificar. Usa el mismo correo de tu cuenta.", "When Bold confirms payment, return here and tap Verify. Use the same email as your account.")}</p><button class="primary-button" data-action="verify-premium">${text("Verificar mi pago", "Verify my payment")}</button><button class="secondary-button" data-action="activate-premium">${text("Abrir Bold otra vez", "Open Bold again")}</button></div></div>`;
@@ -1105,6 +1247,8 @@ function progressForSync() {
     verseRecords: state.verseRecords,
     readChapters: state.completedPlanDays.length,
     completedPlanDays: state.completedPlanDays,
+    completedDevotionalDays: state.completedDevotionalDays,
+    devotionalDay: state.devotionalDay,
     moodDate: state.moodDate,
     quizCompleted: state.quizCompleted,
     quizAnswer: state.quizAnswer,
@@ -1152,6 +1296,8 @@ async function handleAuthSession(session) {
       highlights: syncedProgress.highlights || state.highlights,
       verseRecords: syncedProgress.verseRecords || state.verseRecords,
       completedPlanDays: syncedProgress.completedPlanDays || state.completedPlanDays,
+      completedDevotionalDays: syncedProgress.completedDevotionalDays || state.completedDevotionalDays,
+      devotionalDay: syncedProgress.devotionalDay ?? state.devotionalDay,
       readChapters: (syncedProgress.completedPlanDays || state.completedPlanDays).length,
       moodDate: syncedProgress.moodDate ?? state.moodDate,
       quizCompleted: syncedProgress.quizCompleted ?? state.quizCompleted,
@@ -1326,15 +1472,27 @@ async function getParallelVerseRecord(record) {
   };
 }
 
-function attachParallelPassage(help, parallel, context) {
+function attachParallelPassage(help, parallel, selection, fragment) {
   if (!parallel) return help;
   return {
     ...help,
-    phrase: context,
-    phraseEs: parallel.text,
-    parallelText: parallel.text,
+    phrase: selection,
+    phraseEs: fragment,
+    parallelText: fragment,
     parallelReference: parallel.reference
   };
+}
+
+async function getCanonicalSourceRecord(record) {
+  if (!record) return null;
+  if (record.featuredId) return featuredVerseRecord(getVerse(record.featuredId), record.sourceLang);
+  if (!record.bookId || !record.chapter || !record.verse) return null;
+  const versionId = record.version || (record.sourceLang === "es" ? "mi-biblia" : "kjv");
+  const version = BIBLE_VERSIONS[versionId];
+  if (!version) return null;
+  const chapter = await getBibleChapter(versionId, record.bookId, record.chapter);
+  const sourceText = chapter[Number(record.verse)];
+  return sourceText ? { ...record, text: sourceText } : null;
 }
 
 function localLiteralHelp(selection, sourceLang) {
@@ -1356,7 +1514,7 @@ function localLiteralHelp(selection, sourceLang) {
   };
 }
 
-async function openContextTranslation(selection, context, sourceLang = "en", record = null, suppliedParallel = null) {
+async function openContextTranslation(selection, context, sourceLang = "en", record = null, suppliedParallel = null, selectionRange = null) {
   const cleanSelection = selection.trim();
   const mode = translationMode(cleanSelection);
   if (mode === "empty") return;
@@ -1372,14 +1530,40 @@ async function openContextTranslation(selection, context, sourceLang = "en", rec
     };
     setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: loadingHelp } }, false);
     try {
-      const parallel = suppliedParallel?.text ? suppliedParallel : await getParallelVerseRecord(record);
+      const [parallelResult, hintResult, sourceResult] = await Promise.allSettled([
+        suppliedParallel?.text ? Promise.resolve(suppliedParallel) : getParallelVerseRecord(record),
+        translateWithContext(cleanSelection, cleanSelection, sourceLang),
+        suppliedParallel?.text ? Promise.resolve(null) : getCanonicalSourceRecord(record)
+      ]);
+      const parallel = parallelResult.status === "fulfilled" ? parallelResult.value : null;
+      const hintHelp = hintResult.status === "fulfilled" ? hintResult.value : null;
+      const canonicalSource = sourceResult.status === "fulfilled" ? sourceResult.value : null;
       if (parallel?.text) {
+        const alignmentSource = canonicalSource?.text || context;
+        const aligned = alignParallelFragment({
+          selection: cleanSelection,
+          sourceText: alignmentSource,
+          targetText: parallel.text,
+          hint: hintHelp?.translated || "",
+          range: alignmentSource === context ? selectionRange : null
+        });
+        const fragment = aligned.text || parallel.text;
         setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: {
-          ...attachParallelPassage(loadingHelp, parallel, context),
-          translated: parallel.text,
+          ...attachParallelPassage(loadingHelp, parallel, cleanSelection, fragment),
+          translated: fragment,
           pronunciation: text("Texto bíblico", "Bible text"),
-          type: text("Biblia en el idioma contrario", "Bible in the opposite language"),
-          meaning: text("Resultado tomado del pasaje bíblico paralelo integrado; no es una traducción automática palabra por palabra.", "Result taken from the integrated parallel Bible passage; it is not an automatic word-for-word translation.")
+          type: text("fragmento de la Biblia paralela", "parallel Bible fragment"),
+          meaning: text("Solo se muestra el fragmento equivalente copiado de la Biblia integrada en el idioma contrario.", "Only the equivalent fragment copied from the integrated Bible in the opposite language is shown.")
+        } } }, false);
+        return;
+      }
+      if (hintHelp?.translated) {
+        setState({ modal: { type: "translation", word: cleanSelection, sourceLang, help: {
+          ...hintHelp,
+          phrase: cleanSelection,
+          phraseEs: hintHelp.translated,
+          type: text("frase contextual", "contextual phrase"),
+          meaning: text("Este texto no es un versículo paralelo; se tradujo únicamente la frase seleccionada.", "This text is not a parallel Bible verse; only the selected phrase was translated.")
         } } }, false);
         return;
       }
@@ -1624,6 +1808,28 @@ app.addEventListener("click", async (event) => {
   } else if (action === "open-prayer") {
     navigate("prayer");
     if (state.musicEnabled) await startPrayerMusic();
+  } else if (action === "open-devotional") {
+    setState({ route: "devotional", devotionalDay: devotionalIndexForDate(), modal: null });
+    window.scrollTo({ top: 0, behavior: "instant" });
+    await loadYouthDevotionalContent();
+  } else if (action === "retry-devotional") {
+    await loadYouthDevotionalContent();
+  } else if (action === "devotional-previous" || action === "devotional-next") {
+    const delta = action === "devotional-next" ? 1 : -1;
+    setState({ devotionalDay: (state.devotionalDay + delta + DEVOTIONAL_DAYS) % DEVOTIONAL_DAYS });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } else if (action === "devotional-today") {
+    setState({ devotionalDay: devotionalIndexForDate() });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } else if (action === "complete-devotional") {
+    const devotional = getYouthDevotionalPreview(state.devotionalDay);
+    const alreadyCompleted = state.completedDevotionalDays.includes(devotional.id);
+    const completedDevotionalDays = [...new Set([...state.completedDevotionalDays, devotional.id])];
+    setState({ completedDevotionalDays, points: alreadyCompleted ? state.points : state.points + 15 });
+    if (!alreadyCompleted) {
+      showToast(text("Matutina completada · +15 XP", "Devotional completed · +15 XP"));
+      await showAchievementInterstitial({ premium: state.premium });
+    }
   } else if (action === "open-topics") {
     navigate("topics");
   } else if (action === "select-topic") {
@@ -1659,13 +1865,16 @@ app.addEventListener("click", async (event) => {
   } else if (action === "translate-selection") {
     const host = actionTarget.closest("[data-verse-key]");
     if (!host) return;
-    const selection = [...host.querySelectorAll(".word-token.selected")]
-      .map((token) => token.dataset.word)
-      .join(" ");
+    const selectedTokens = [...host.querySelectorAll(".word-token.selected")];
+    const selection = selectedTokens.map((token) => token.dataset.word).join(" ");
+    const selectedIndexes = selectedTokens.map((token) => Number(token.dataset.tokenIndex)).filter(Number.isInteger);
+    const selectionRange = selectedIndexes.length
+      ? { startIndex: Math.min(...selectedIndexes), endIndex: Math.max(...selectedIndexes) }
+      : null;
     const suppliedParallel = host.dataset.parallelText
       ? { text: host.dataset.parallelText, reference: host.dataset.parallelReference || text("Texto paralelo", "Parallel text") }
       : null;
-    await openContextTranslation(selection, host.dataset.verseContext || host.dataset.verseText || selection, host.dataset.sourceLang || "en", recordFromElement(host), suppliedParallel);
+    await openContextTranslation(selection, host.dataset.verseContext || host.dataset.verseText || selection, host.dataset.sourceLang || "en", recordFromElement(host), suppliedParallel, selectionRange);
   } else if (action === "clear-selection") {
     clearSelectionUI();
   } else if (action === "translate-word") {
@@ -1674,7 +1883,8 @@ app.addEventListener("click", async (event) => {
     const suppliedParallel = host?.dataset.parallelText
       ? { text: host.dataset.parallelText, reference: host.dataset.parallelReference || text("Texto paralelo", "Parallel text") }
       : null;
-    await openContextTranslation(word, host?.dataset.verseContext || word, host?.dataset.sourceLang || "en", recordFromElement(host), suppliedParallel);
+    const tokenIndex = Number(actionTarget.dataset.tokenIndex);
+    await openContextTranslation(word, host?.dataset.verseContext || word, host?.dataset.sourceLang || "en", recordFromElement(host), suppliedParallel, Number.isInteger(tokenIndex) ? { startIndex: tokenIndex, endIndex: tokenIndex } : null);
   } else if (action === "translate-phrase") {
     const word = actionTarget.dataset.phrase;
     const sourceLang = actionTarget.closest("[data-source-lang]")?.dataset.sourceLang || (state.bibleVersion === "mi-biblia" ? "es" : "en");
@@ -1895,6 +2105,33 @@ app.addEventListener("click", async (event) => {
     } catch (error) {
       showToast(error.message);
     }
+  } else if (action === "ad-privacy-options") {
+    const shown = await showAdPrivacyOptions();
+    if (!shown) showToast(dualText("Las opciones se mostrarán cuando AdMob las requiera en el APK.", "Options will appear in the APK when AdMob requires them."));
+  } else if (action === "open-delete-account") {
+    setState({ modal: { type: "delete-account" }, authError: null }, false);
+  } else if (action === "open-privacy-policy") {
+    await openPrivacyPolicy();
+  } else if (action === "open-account-deletion-page") {
+    await openAccountDeletionPage();
+  } else if (action === "confirm-delete-account") {
+    setState({ authLoading: true, authError: null }, false);
+    try {
+      await deleteAccount();
+      const preservedPreferences = {
+        phase: "app", onboarded: true, uiLang: state.uiLang, bibleVersion: state.bibleVersion,
+        dark: state.dark, notificationPromptSeen: state.notificationPromptSeen,
+        notificationsEnabled: state.notificationsEnabled
+      };
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(STORAGE_BACKUP_KEY);
+      state = { ...initialState, ...preservedPreferences, route: "profile", modal: null };
+      persist();
+      render();
+      showToast(dualText("Cuenta y datos eliminados", "Account and data deleted"));
+    } catch (error) {
+      setState({ authLoading: false, authError: error.message || dualText("No pudimos eliminar la cuenta", "We couldn't delete the account") }, false);
+    }
   } else if (action === "open-update") {
     await openRequiredUpdate(state.updateRequired);
   } else if (action === "show-favorites" || action === "show-notes") {
@@ -1964,6 +2201,14 @@ app.addEventListener("input", (event) => {
   bibleSearchTimer = setTimeout(() => runFullBibleSearch(value), 220);
 });
 
+app.addEventListener("change", (event) => {
+  if (event.target.id !== "devotional-picker") return;
+  const devotionalDay = Number(event.target.value);
+  if (!Number.isInteger(devotionalDay)) return;
+  setState({ devotionalDay: Math.max(0, Math.min(DEVOTIONAL_DAYS - 1, devotionalDay)) });
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
 window.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
@@ -1983,7 +2228,7 @@ MobileApp.addListener("appStateChange", ({ isActive }) => {
   }
   if (state.dailyQuizDate !== dateKey()) {
     setState({ dailyQuizDate: dateKey(), dailyQuizAnswers: { language: null, bible: null }, dailyQuizCompleted: { language: false, bible: false }, quizCompleted: false, quizAnswer: null });
-  } else if (state.route === "prayer" || state.route === "home" || state.route === "learn") render();
+  } else if (["prayer", "home", "learn", "devotional"].includes(state.route)) render();
   ensurePrayerNotificationSchedule();
 }).catch(() => {});
 
@@ -2024,6 +2269,7 @@ setTimeout(() => {
   state.phase = !state.onboarded ? "onboarding" : (moodSeenToday ? "app" : "mood");
   if (state.phase === "app" && state.route === "chapter") openBibleChapter(state.selectedBookId, state.selectedChapter, state.selectedKjvVerse, state.bibleVersion);
   else render();
+  if (state.phase === "app" && state.route === "devotional") loadYouthDevotionalContent();
 }, 900);
 
 if (import.meta.env.PROD && "serviceWorker" in navigator && location.protocol.startsWith("http")) {

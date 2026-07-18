@@ -39,6 +39,7 @@ export function mergeProgress(saved = {}, local = {}) {
     points: Math.max(Number(saved.points) || 0, Number(local.points) || 0),
     readChapters: [...new Set([...(saved.completedPlanDays || []), ...(local.completedPlanDays || [])].map(Number))].length,
     completedPlanDays: [...new Set([...(saved.completedPlanDays || []), ...(local.completedPlanDays || [])].map(Number))].sort((a, b) => a - b),
+    completedDevotionalDays: [...new Set([...(saved.completedDevotionalDays || []), ...(local.completedDevotionalDays || [])])],
     dataSchemaVersion: Math.max(Number(saved.dataSchemaVersion) || 0, Number(local.dataSchemaVersion) || 0),
     lastPrayerDate: ritualSchema ? (ritualSource.lastPrayerDate || null) : (prayerSource.lastPrayerDate || newer.lastPrayerDate || older.lastPrayerDate || null),
     lastPrayerCompletedAt: ritualSchema ? (ritualSource.lastPrayerCompletedAt || null) : (prayerSource.lastPrayerCompletedAt || null),

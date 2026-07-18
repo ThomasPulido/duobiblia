@@ -94,6 +94,17 @@ export async function signOut() {
   if (error) throw error;
 }
 
+export async function deleteAccount() {
+  if (!supabase) throw new Error("AUTH_NOT_CONFIGURED");
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData.session) throw new Error("ACCOUNT_REQUIRED");
+  const { error } = await supabase.functions.invoke("delete-account", {
+    body: { confirmation: "DELETE_DUOBIBLIA_ACCOUNT" }
+  });
+  if (error) throw error;
+  await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+}
+
 let progressSyncQueue = Promise.resolve();
 
 async function performProgressSync(user, progress) {
